@@ -1,5 +1,10 @@
 package transport
 
+import (
+	"io"
+	"time"
+)
+
 // Delivery is an ordered byte stream in 1 stream
 type Delivery struct {
 	StreamID uint32

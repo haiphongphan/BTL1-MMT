@@ -1,0 +1,10 @@
+{
+  "phong": {
+    "salt": "s3cr3t1",
+    "hash": "21cfbf713aa9e95176896a3afd4f195af7edcc622575357eb38559e9aba6415f"
+  },
+  "phan": {
+    "salt": "s3cr3t2",
+    "hash": "ddc202558db87918bf92da829b4795584acb486d8691e6d2c215d815e5a7dcaf"
+  }
+}
