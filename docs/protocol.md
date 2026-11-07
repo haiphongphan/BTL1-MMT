@@ -45,9 +45,75 @@ Client                                                                          
 | 0x03 | PING   | `type(1)`                                                       | Có (để giữ kết nối) |
 | 0x04 | CLOSE  | `type(1) reason_len(1) reason`                                  | Không               |
 
+Tất cả số nguyên đều **big-endian**. Số phía trên khung là offset byte tính từ đầu frame.
+
+**STREAM (0x01)**: header 12 byte + data (≤ 1000 byte)
+
+```
+ 0      1       2           6           10      12                 12+len
+ ┌──────┬───────┬───────────┬───────────┬───────┬────────────────────┐
+ │ type │ flags │ stream_id │  offset   │  len  │        data        │
+ │ 0x01 │ bit0= │  uint32   │  uint32   │uint16 │     len byte       │
+ │      │  FIN  │           │           │       │                    │
+ └──────┴───────┴───────────┴───────────┴───────┴────────────────────┘
+   flags: 7 6 5 4 3 2 1 0
+          └─ dự phòng ─┘ └ FIN = 1: đây là đoạn cuối của stream
+   offset: vị trí byte đầu tiên của data trong stream (bên nhận ghép lại theo offset)
+```
+
+**ACK (0x02)**: 6 byte + n × 8 byte (n ≤ 8, tối đa 70 byte)
+
+```
+ 0      1           5     6           10          14          18
+ ┌──────┬───────────┬─────┬───────────┬───────────┬───────────┬───────────┬─────
+ │ type │  window   │  n  │  start_0  │   end_0   │  start_1  │   end_1   │ ...
+ │ 0x02 │  uint32   │ u8  │  uint32   │  uint32   │  uint32   │  uint32   │
+ └──────┴───────────┴─────┴───────────┴───────────┴───────────┴───────────┴─────
+                          └──── range 0 ──────────┘└──── range 1 ──────────┘
+   window: số byte bên nhận còn trống (flow control)
+   range [start..end]: inclusive, sắp giảm dần; end_0 = packet_num lớn nhất đã nhận
+```
+
+Ví dụ: đã nhận gói 1–5, 7–9, 12
+
+```
+ ┌──────┬────────┬───┬────┬────┬───┬───┬───┬───┐
+ │ 0x02 │ 48000  │ 3 │ 12 │ 12 │ 7 │ 9 │ 1 │ 5 │   (30 byte), thiếu 6, 10, 11
+ └──────┴────────┴───┴────┴────┴───┴───┴───┴───┘
+```
+
+**PING (0x03)**: 1 byte
+
+```
+ 0      1
+ ┌──────┐
+ │ type │
+ │ 0x03 │
+ └──────┘
+```
+
+**CLOSE (0x04)**: 2 byte + reason (≤ 255 byte)
+
+```
+ 0      1            2                  2+reason_len
+ ┌──────┬────────────┬────────────────────┐
+ │ type │ reason_len │       reason       │
+ │ 0x04 │     u8     │  UTF-8, reason_len │
+ └──────┴────────────┴────────────────────┘
+```
+
+**Nhiều frame trong một gói**: frame xếp liền nhau, không có dấu phân cách. Bên nhận đọc `type` để biết độ dài của frame, cắt frame đó ra rồi đọc tiếp tới hết phần plaintext.
+
+```
+ ┌─────────── header 12 ──────────┐┌───────────────── plaintext sau khi giải mã (≤ 1172) ──────────────────┐┌ tag 16 ┐
+ │magic│ver│flg│conn_id│packet_num ││ STREAM (12 + 1000) │ ACK (6 + 8n) │ PING (1) │                        ││        │
+ └────────────────────────────────┘└───────────────────────────────────────────────────────────────────────┘└────────┘
+```
+
 - **stream_id**: client dùng số lẻ (1, 3, 5...), server dùng số chẵn (2, 4, 6...), nên hai bên không bao giờ đụng nhau.
-- Mỗi STREAM frame mang tối đa **1000 byte data**, để còn chỗ ghép thêm 1 ACK frame (≤ 71 byte).
+- Mỗi STREAM frame mang tối đa **1000 byte data**, để còn chỗ ghép thêm 1 ACK frame (≤ 70 byte).
 - **Gói chỉ chứa ACK thì không được ACK lại**, nếu không hai bên sẽ ACK nhau vô hạn.
+- **CLOSE reason**: chuỗi UTF-8, tối đa **255 byte** (vì `reason_len` chỉ có 1 byte). Bên gửi tự cắt nếu dài hơn; nên dùng câu ngắn bằng tiếng Anh (`"timeout"`, `"server shutdown"`, `"duplicate login"`) để không cắt giữa ký tự nhiều byte.
 
 ### 3.5 Nội dung một stream (tầng app)
 
