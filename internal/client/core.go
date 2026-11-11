@@ -3,22 +3,37 @@ package client
 import (
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
-	"time"
+	"strconv"
 	"sync"
-	"errors"
+	"time"
 
 	"github.com/phongphanhai06/go-collab/internal/protocol"
 	"github.com/phongphanhai06/go-collab/internal/transport"
 )
 
 type Client struct {
-	User     string
-	EP       transport.Endpoint
-	Events   *EventLog
-	mu sync.Mutex
-	online   []string
+	User        string
+	Events      *EventLog
+	DownloadDir string
+
+	mu      sync.Mutex // bảo vệ mọi field bên dưới
+	online  []string
+	ep      transport.Endpoint
+	closing bool
+	addr    string // lưu lại để reconnect
+	pass    string
+	loss    float64
+}
+
+func NewClient(username string) *Client {
+	return &Client{
+		User:        username,
+		Events:      NewEventLog(),
+		DownloadDir: "downloads",
+	}
 }
 
 func (c *Client) OnlineUsers() []string {
@@ -33,14 +48,71 @@ func (c *Client) setOnline(users []string) {
 	c.mu.Unlock()
 }
 
-func NewClient(username string) *Client {
-	return &Client{
-		User:   username,
-		Events: NewEventLog(),
+func (c *Client) endpoint() transport.Endpoint {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.ep
+}
+
+func (c *Client) isClosing() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.closing
+}
+
+func (c *Client) Connect(serverTCPAddr, password string, loss float64) error {
+	c.mu.Lock()
+	c.addr, c.pass, c.loss = serverTCPAddr, password, loss
+	c.mu.Unlock()
+	return c.dial()
+}
+
+func (c *Client) dial() error {
+	c.mu.Lock()
+	addr, pass, loss := c.addr, c.pass, c.loss
+	c.mu.Unlock()
+
+	keyx, kUDP, err := c.ConnectTCPAndAuth(addr, pass)
+	if err != nil {
+		return err
+	}
+
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return err
+	}
+	srvUDP, err := net.ResolveUDPAddr("udp", net.JoinHostPort(host, strconv.Itoa(keyx.UDPPort)))
+	if err != nil {
+		return err
+	}
+
+	sock, err := net.ListenUDP("udp", nil) 
+	if err != nil {
+		return err
+	}
+	var pc transport.PacketConn = sock
+	if loss > 0 {
+		pc = &transport.LossyConn{UDPConn: sock, Loss: loss}
+	}
+	conn, err := transport.Dial(pc, srvUDP, keyx.ConnID, kUDP) // Dial tự gửi PING đầu tiên
+	if err != nil {
+		sock.Close()
+		return err
+	}
+	c.AttachEndpoint(conn)
+	return nil
+}
+
+func (c *Client) Close() {
+	c.mu.Lock()
+	c.closing = true
+	ep := c.ep
+	c.mu.Unlock()
+	if ep != nil {
+		ep.Close()
 	}
 }
 
-// ConnectTCPAndAuth thực hiện Handshake TCP (Step 2, 3)
 func (c *Client) ConnectTCPAndAuth(serverTCPAddr, password string) (*protocol.KeyX, [32]byte, error) {
 	conn, err := net.DialTimeout("tcp", serverTCPAddr, 5*time.Second)
 	if err != nil {
@@ -87,58 +159,111 @@ func (c *Client) ConnectTCPAndAuth(serverTCPAddr, password string) (*protocol.Ke
 	return &keyx, kUDP, nil
 }
 
-// AttachEndpoint gắn Endpoint (Fake hoặc Real UDP) và bắt đầu nhận tin
 func (c *Client) AttachEndpoint(ep transport.Endpoint) {
-	c.EP = ep
-	go c.listenLoop()
+	c.mu.Lock()
+	c.ep = ep
+	c.mu.Unlock()
+	go c.listenLoop(ep)
 }
 
-func (c *Client) listenLoop() {
-	buffers := make(map[uint32][]byte)
+type inStream struct {
+	kind byte
+	buf  []byte    // message: gom tới FIN
+	file *fileRecv // file: ghi thẳng xuống đĩa
+}
+
+func (c *Client) listenLoop(ep transport.Endpoint) {
+	streams := make(map[uint32]*inStream)
+	defer func() {
+		for _, st := range streams { // file nhận dở → xóa file chưa hoàn chỉnh
+			if st.file != nil {
+				st.file.abort()
+			}
+		}
+	}()
+
 	for {
 		select {
-		case d, ok := <-c.EP.Recv():
+		case d, ok := <-ep.Recv():
 			if !ok {
 				return
 			}
-			if len(d.Data) > 0 {
-				buffers[d.StreamID] = append(buffers[d.StreamID], d.Data...)
-			}
-			if !d.Fin {
-				continue
-			}
-
-			fullData := buffers[d.StreamID]
-			delete(buffers, d.StreamID)
-
-			if len(fullData) > 0 && fullData[0] == protocol.KindMessage {
-				var msg protocol.AppMsg
-				if err := json.Unmarshal(fullData[1:], &msg); err == nil {
-					if msg.Type == "users" {
-						c.setOnline(msg.Users)
-					}
-					c.Events.Add(msg.Type, msg)
+			st := streams[d.StreamID]
+			if st == nil {
+				if len(d.Data) == 0 {
+					continue
 				}
+				st = &inStream{kind: d.Data[0]}
+				if st.kind == protocol.KindFile {
+					st.file = &fileRecv{}
+				}
+				streams[d.StreamID] = st
 			}
 
-		case <-c.EP.Done():
-			c.Events.Add("status", "disconnected")
+			switch st.kind {
+			case protocol.KindMessage:
+				st.buf = append(st.buf, d.Data...)
+				if d.Fin {
+					c.handleMessage(st.buf)
+				}
+			case protocol.KindFile:
+				c.onFileData(st.file, d)
+			}
+			if d.Fin {
+				delete(streams, d.StreamID)
+			}
+
+		case <-ep.Done():
+			if c.isClosing() {
+				c.Events.Add("status", "disconnected")
+				return
+			}
+			c.Events.Add("status", "reconnecting")
+			go c.reconnectLoop()
 			return
 		}
+	}
+}
+
+func (c *Client) handleMessage(data []byte) {
+	var msg protocol.AppMsg
+	if err := json.Unmarshal(data[1:], &msg); err != nil {
+		return
+	}
+	if msg.Type == "users" {
+		c.setOnline(msg.Users)
+	}
+	c.Events.Add(msg.Type, msg)
+}
+
+// reconnectLoop thử lại với backoff 1s, 2s, 4s... tối đa 30s.
+// Server coi lần kết nối lại là phiên mới (conn_id mới, khóa mới).
+func (c *Client) reconnectLoop() {
+	delay := time.Second
+	for !c.isClosing() {
+		time.Sleep(delay)
+		err := c.dial()
+		if err == nil {
+			c.Events.Add("status", "connected")
+			return
+		}
+		c.Events.Add("status", fmt.Sprintf("kết nối lại thất bại: %v", err))
+		delay = min(delay*2, 30*time.Second)
 	}
 }
 
 var ErrNotConnected = errors.New("client: chưa có kết nối UDP")
 
 func (c *Client) send(m protocol.AppMsg) error {
-	if c.EP == nil {
+	ep := c.endpoint()
+	if ep == nil {
 		return ErrNotConnected
 	}
 	b, err := json.Marshal(m)
 	if err != nil {
 		return err
 	}
-	return c.EP.SendMessage(append([]byte{protocol.KindMessage}, b...))
+	return ep.SendMessage(append([]byte{protocol.KindMessage}, b...))
 }
 
 func (c *Client) SendChat(text string) error {

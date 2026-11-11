@@ -16,15 +16,14 @@ func main() {
 	serverAddr := flag.String("server", "127.0.0.1:9000", "Server TCP Address")
 	username := flag.String("user", "phong", "Username")
 	password := flag.String("pass", "123456", "Password")
+	loss := flag.Float64("loss", 0, "Tỉ lệ mất gói giả lập khi gửi (0.1 = 10%)")
 	flag.Parse()
 
 	c := client.NewClient(*username)
-	_, _, err := c.ConnectTCPAndAuth(*serverAddr, *password)
-	if err != nil {
+	if err := c.Connect(*serverAddr, *password, *loss); err != nil {
 		log.Fatalf("Đăng nhập thất bại: %v", err)
 	}
 	fmt.Println("✅ Đăng nhập THÀNH CÔNG!")
-	// TODO(ghép nối): tạo transport.Conn từ keyx.ConnID + kUDP, gửi PING đầu tiên, rồi c.AttachEndpoint(conn)
 
 
 	// Loop in Event ra console
@@ -50,9 +49,7 @@ func main() {
 		switch {
 		case line == "":
 		case line == "/quit":
-			if c.EP != nil {
-				c.EP.Close()
-			}
+			c.Close()
 			return
 		case line == "/users":
 			fmt.Println("Online:", c.OnlineUsers())
@@ -65,6 +62,20 @@ func main() {
 			err = c.SendDM(parts[1], parts[2])
 		case strings.HasPrefix(line, "/msg "):
 			err = c.SendChat(strings.TrimPrefix(line, "/msg "))
+				case strings.HasPrefix(line, "/file "):
+			parts := strings.Fields(line)
+			to := ""
+			if len(parts) >= 3 {
+				to = parts[2]
+			}
+			path := parts[1]
+			go func() { 
+				if err := c.SendFile(path, to); err != nil {
+					fmt.Println("\nGửi file lỗi:", err)
+				} else {
+					fmt.Println("\nĐã gửi xong", path)
+				}
+			}()
 		default:
 			err = c.SendChat(line)
 		}

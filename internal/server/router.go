@@ -9,6 +9,14 @@ import (
 	"github.com/phongphanhai06/go-collab/internal/transport"
 )
 
+type inStream struct {
+	kind byte
+	buf []byte
+	hdr protocol.FileHeaderParser
+	relay chan []byte
+	drop bool
+}
+
 func (sess *Session) Send(b []byte) bool {
 	select {
 	case sess.sendCh <- b:
@@ -46,15 +54,20 @@ func (s *Server) AttachEndpoint(connID uint32, ep transport.Endpoint) bool {
 }
 
 func (s *Server) serveSession(sess *Session) {
-	// Bắt Panic để không làm sập Server nếu có lỗi bất ngờ ở 1 Client (Step 7)
+	streams := make(map[uint32]*inStream)
+
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[Server] Panic recovered in session '%s': %v", sess.Username, r)
 		}
+		for _, st := range streams {
+			if st.relay != nil {
+				close(st.relay)
+			}
+		}
 		s.dropSession(sess)
 	}()
 
-	buffers := make(map[uint32][]byte)
 
 	for {
 		select {
@@ -62,26 +75,23 @@ func (s *Server) serveSession(sess *Session) {
 			if !ok {
 				return
 			}
-			// Gom mảnh stream theo StreamID
-			if len(d.Data) > 0 {
-				buffers[d.StreamID] = append(buffers[d.StreamID], d.Data...)
-			}
-			if !d.Fin {
-				continue
-			}
-
-			// Khi Stream kết thúc (Fin = true), xử lý dữ liệu hoàn chỉnh
-			fullData := buffers[d.StreamID]
-			delete(buffers, d.StreamID)
-
-			if len(fullData) > 0 && fullData[0] == protocol.KindMessage {
-				var msg protocol.AppMsg
-				if err := json.Unmarshal(fullData[1:], &msg); err != nil {
-					log.Printf("[Server] Invalid JSON from %s: %v", sess.Username, err)
+			st := streams[d.StreamID]
+			if st == nil {
+				if len(d.Data) == 0 {
 					continue
 				}
-				msg.From = sess.Username // Ghi đè From để chống giả danh
-				s.routeMessage(sess, msg)
+				st = &inStream{kind: d.Data[0]}
+				streams[d.StreamID] = st
+			}
+			
+			switch st.kind {
+			case protocol.KindMessage:
+				s.onMessageData(sess, st, d)
+			case protocol.KindFile:
+				s.onFileData(sess, st, d)
+			}
+			if d.Fin {
+				delete(streams, d.StreamID)
 			}
 
 		case <-sess.EP.Done():
@@ -90,6 +100,34 @@ func (s *Server) serveSession(sess *Session) {
 		}
 	}
 }
+
+func (s *Server) onMessageData(sess *Session, st *inStream, d transport.Delivery) {
+	if !st.drop {
+		st.buf = append(st.buf, d.Data...)
+		if len(st.buf) > maxMessageSize {
+			log.Printf("[Server] Tin của %s quá lớn, bỏ", sess.Username)
+			st.drop, st.buf = true, nil
+		}
+	}
+	if !d.Fin || st.drop {
+		return
+	}
+	var msg protocol.AppMsg
+	if err := json.Unmarshal(st.buf[1:], &msg); err != nil {
+		log.Printf("[Server] Invalid JSON from %s: %v", sess.Username, err)
+		return
+	}
+	msg.From = sess.Username // Ghi đè From để chống giả danh
+	s.routeMessage(sess, msg)
+}
+
+func (s *Server) sendError(to *Session, text string) {
+	b, err := json.Marshal(protocol.AppMsg{Type: "error", Text: text, TS: time.Now().UnixMilli()})
+	if err == nil {
+		to.Send(append([]byte{protocol.KindMessage}, b...))
+	}
+}
+
 
 func (s *Server) routeMessage(from *Session, msg protocol.AppMsg) {
 	msg.TS = time.Now().UnixMilli()
@@ -115,14 +153,7 @@ func (s *Server) routeMessage(from *Session, msg protocol.AppMsg) {
 			target.Send(packet)
 		} else {
 			// Báo lỗi lại cho người gửi nếu receiver không online
-			errReply := protocol.AppMsg{
-				Type: "error",
-				Text: "User '" + msg.To + "' hiện không online.",
-				TS:   time.Now().UnixMilli(),
-			}
-			if errBytes, err := json.Marshal(errReply); err == nil {
-				from.Send(append([]byte{protocol.KindMessage}, errBytes...))
-			}
+			s.sendError(from, "User '"+msg.To+"' hiện không online.")
 		}
 	}
 }

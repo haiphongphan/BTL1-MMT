@@ -27,6 +27,7 @@ type Server struct {
 	users map[string]UserAccount
 	nextConnID atomic.Uint32
 	udpPort int
+	mux *transport.Mux
 }
 
 func NewServer(usersFilePath string, udpPort int) (*Server, error) {
@@ -47,6 +48,21 @@ func NewServer(usersFilePath string, udpPort int) (*Server, error) {
 	srv.nextConnID.Store(1000) // Khởi tạo ID bắt đầu từ 1000
 	return srv, nil
 }
+
+func (s *Server) ListenUDP(loss float64) error {
+	sock, err := net.ListenUDP("udp", &net.UDPAddr{Port: s.udpPort})
+	if err != nil {
+		return err
+	}
+	var pc transport.PacketConn = sock
+	if loss > 0 {
+		pc = &transport.LossyConn{UDPConn: sock, Loss: loss}
+	}
+	s.mux = transport.NewMux(pc)
+	log.Printf("[Server] UDP transport running on :%d (loss %.0f%%)", s.udpPort, loss*100)
+	return nil
+}
+
 
 func (s *Server) ListenTCP(addr string) error {
 	ln, err := net.Listen("tcp", addr)
@@ -138,12 +154,15 @@ func (s *Server) handleHandshake(c net.Conn) {
 	}
 	log.Printf("[Server] User '%s' authenticated from %s (ConnID: %d)", cred.User, c.RemoteAddr(), connID)
 
-	// Quá hạn mà client chưa gửi gói UDP đầu tiên → hủy session, cho phép đăng nhập lại
-	time.AfterFunc(pendingTimeout, func() {
-		if s.reg.RemoveIfPending(sess) {
-			log.Printf("[Server] User '%s' pending quá hạn, đã hủy", sess.Username)
-		}
-	})
+	
+	conn, err := s.mux.Accept(connID, kUDP)
+	if err != nil {
+		s.reg.Remove(sess)
+		protocol.WriteMsg(c, protocol.AuthResult{Type: "AUTH_FAIL", Reason: "Lỗi tạo kết nối UDP"})
+		return
+	}
+	s.AttachEndpoint(connID, conn)
+
 
 	// Trả AUTH_OK
 	protocol.WriteMsg(c, protocol.AuthResult{
