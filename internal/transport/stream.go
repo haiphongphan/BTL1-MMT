@@ -129,7 +129,7 @@ func (c *Conn) enqueue(f *protocol.StreamFrame, urgent bool) error {
 	select {
 	case ch <- f:
 		return nil // avai -> enqueue
-	case <- c.done:
+	case <-c.done:
 		return ErrClosed // closed connection -> exit
 	}
 }

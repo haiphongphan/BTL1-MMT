@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Collab</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header id="statusbar">
+  <span id="me">…</span>
+  <span id="state" class="state">⚪ đang tải</span>
+  <span id="net">RTT – · cwnd – · loss –</span>
+</header>
+
+<main>
+  <aside id="sidebar">
+    <h2>Online</h2>
+    <ul id="users"></ul>
+    <p class="hint">Bấm tên để chat riêng</p>
+  </aside>
+
+  <section id="chat">
+    <nav id="tabs"><button class="tab active" data-tab="">Chung</button></nav>
+    <div id="messages"></div>
+    <form id="sendform">
+      <input id="text" autocomplete="off" placeholder="Nhập tin nhắn…">
+      <button type="submit">Gửi</button>
+      <label class="filebtn">📎<input id="file" type="file" hidden></label>
+    </form>
+  </section>
+
+  <aside id="files">
+    <h2>File</h2>
+    <div id="filelist"></div>
+  </aside>
+</main>
+
+<script src="/app.js"></script>
+</body>
+</html>

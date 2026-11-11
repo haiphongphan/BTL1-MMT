@@ -11,15 +11,15 @@ import (
 )
 
 const (
-	tickInterval = 10 * time.Millisecond
-	pingInterval = 2 * time.Second // ping every 2s when free
-	idleTimeout = 10 * time.Second // quiet 10s -> terminate
-	recvBufMax = 1 << 20 // max size for receiving window is 1MB
-	maxBulkQueue = 256 // stop receiving new frame file
-	lossThreshold = 3 // surpass by packet >= pn + 3 acked packet
-	maxAckRanges = 8
-	ackFrameMax = 1 + 4 + 1 + maxAckRanges * 8 // = 70 bytes each frame
-	streamFrameHdr = 12
+	tickInterval    = 10 * time.Millisecond
+	pingInterval    = 2 * time.Second  // ping every 2s when free
+	idleTimeout     = 10 * time.Second // quiet 10s -> terminate
+	recvBufMax      = 1 << 20          // max size for receiving window is 1MB
+	maxBulkQueue    = 256              // stop receiving new frame file
+	lossThreshold   = 3                // surpass by packet >= pn + 3 acked packet
+	maxAckRanges    = 8
+	ackFrameMax     = 1 + 4 + 1 + maxAckRanges*8 // = 70 bytes each frame
+	streamFrameHdr  = 12
 	closedStreamTTL = 30 * time.Second
 
 	dirClientToServer byte = 0
@@ -27,35 +27,35 @@ const (
 )
 
 type congestionController interface {
-	Window() int // how many bytes are "in flight"/unacked
+	Window() int                    // how many bytes are "in flight"/unacked
 	OnAck(acked int, now time.Time) //
 	OnLoss(now time.Time)
 }
 
-type fixedWindow struct {}
+type fixedWindow struct{}
 
 func (fixedWindow) Window() int {
 	return 64 * 1024
 }
 
 func (fixedWindow) OnAck(acked int, now time.Time) {}
-func (fixedWindow) OnLoss(now time.Time) {}
+func (fixedWindow) OnLoss(now time.Time)           {}
 
 type inPacket struct {
-	raw []byte
+	raw  []byte
 	addr *net.UDPAddr
 }
 
 type sentPacket struct {
 	sentAt time.Time
-	size int
+	size   int
 	frames []*protocol.StreamFrame // keep for later use if this packet is lost
 }
 
 type Conn struct {
-	id uint32
-	sock PacketConn
-	aead cipher.AEAD
+	id               uint32
+	sock             PacketConn
+	aead             cipher.AEAD
 	sendDir, recvDir byte
 
 	//==========Communication Channel With Other Goroutines========
@@ -66,37 +66,37 @@ type Conn struct {
 	closeReq chan struct{}              // app calls Close()
 	done     chan struct{}              // close when done
 
-	stats atomic.Pointer[Stats] // app reads Stats() without lock
+	stats      atomic.Pointer[Stats] // app reads Stats() without lock
 	nextStream atomic.Uint32
 
 	// ========Only For Goroutine run()==========
-	peer *net.UDPAddr // nil until server receives the first packet from client
-	nextPN uint32
-	unacked map[uint32]*sentPacket
-	retransQ []*protocol.StreamFrame
-	urgentQ []*protocol.StreamFrame
-	bulkQ []*protocol.StreamFrame
-	largestAcked uint32
-	haveAcked bool
-	recvd ackTracker
-	ackNeeded bool
-	pingNeeded bool
-	streams map[uint32]*recvStream
+	peer          *net.UDPAddr // nil until server receives the first packet from client
+	nextPN        uint32
+	unacked       map[uint32]*sentPacket
+	retransQ      []*protocol.StreamFrame
+	urgentQ       []*protocol.StreamFrame
+	bulkQ         []*protocol.StreamFrame
+	largestAcked  uint32
+	haveAcked     bool
+	recvd         ackTracker
+	ackNeeded     bool
+	pingNeeded    bool
+	streams       map[uint32]*recvStream
 	closedStreams map[uint32]time.Time
-	outQ []Delivery // wait to ship to app (run() never blocks because of slow app)
-	outBytes int // total bytes in outQ
-	pendingBytes int // total bytes in pending of every recvStream
-	lastAdvWindow int // receive window that last broadcast
-	rtt rttEstimator
-	cc congestionController
+	outQ          []Delivery // wait to ship to app (run() never blocks because of slow app)
+	outBytes      int        // total bytes in outQ
+	pendingBytes  int        // total bytes in pending of every recvStream
+	lastAdvWindow int        // receive window that last broadcast
+	rtt           rttEstimator
+	cc            congestionController
 	bytesInFlight int
-	peerWindow int
+	peerWindow    int
 	recoveryStart time.Time
-	lastHeard time.Time
-	lastSent time.Time
-	sentPkts uint64
-	lostPkts uint64
-	closed bool
+	lastHeard     time.Time
+	lastSent      time.Time
+	sentPkts      uint64
+	lostPkts      uint64
+	closed        bool
 }
 
 var _ Endpoint = (*Conn)(nil)
@@ -108,12 +108,12 @@ func newConn(sock PacketConn, peer *net.UDPAddr, id uint32, key [32]byte, isServ
 	}
 
 	now := time.Now()
-	c := &Conn {
+	c := &Conn{
 		id:            id,
 		sock:          sock,
 		aead:          aead,
 		peer:          peer,
-		in:            make(chan inPacket,256),
+		in:            make(chan inPacket, 256),
 		urgentCh:      make(chan *protocol.StreamFrame, 64),
 		bulkCh:        make(chan *protocol.StreamFrame, 64),
 		recvCh:        make(chan Delivery, 64),
@@ -127,7 +127,7 @@ func newConn(sock PacketConn, peer *net.UDPAddr, id uint32, key [32]byte, isServ
 		peerWindow:    recvBufMax, // pretend the other side has 1 MB until the first ack
 		lastAdvWindow: recvBufMax,
 		lastHeard:     now,
-		lastSent: now,
+		lastSent:      now,
 	}
 
 	if isServer {
@@ -136,13 +136,12 @@ func newConn(sock PacketConn, peer *net.UDPAddr, id uint32, key [32]byte, isServ
 	} else {
 		c.sendDir, c.recvDir = dirClientToServer, dirServerToClient
 		c.nextStream.Store(^uint32(0)) // = -1 -> Add(2) for 1, 3, 5, ...
-		c.pingNeeded = true // first pack for server to know client's UDP addr
+		c.pingNeeded = true            // first pack for server to know client's UDP addr
 	}
 	c.publishStats()
 	go c.run()
 	return c, nil
 }
-
 
 /* ========== API endpoint for app ==========*/
 func (c *Conn) Recv() <-chan Delivery {
@@ -246,7 +245,7 @@ func (c *Conn) shutdown() {
 	close(c.done) // only run() calls shutdown -> never close 2 times
 }
 
-//========== Receiver ==========
+// ========== Receiver ==========
 func (c *Conn) handlePacket(p inPacket, now time.Time) {
 	if c.closed {
 		return
@@ -346,8 +345,8 @@ func (c *Conn) onStreamFrame(f *protocol.StreamFrame, now time.Time) {
 	for i, d := range chunks {
 		c.queueDelivery(Delivery{
 			StreamID: f.StreamID,
-			Data: d,
-			Fin: done && i == len(chunks) - 1,
+			Data:     d,
+			Fin:      done && i == len(chunks)-1,
 		})
 	}
 
@@ -371,11 +370,11 @@ func (c *Conn) queueDelivery(d Delivery) {
 
 // recvWindow: remaining slots for data (flow control)
 func (c *Conn) recvWindow() int {
-	return max(recvBufMax - c.outBytes - c.pendingBytes, 0)
+	return max(recvBufMax-c.outBytes-c.pendingBytes, 0)
 }
 
 func (c *Conn) maybeWindowUpdate() {
-	if c.lastAdvWindow < recvBufMax / 4 && c.recvWindow() >= recvBufMax / 2 {
+	if c.lastAdvWindow < recvBufMax/4 && c.recvWindow() >= recvBufMax/2 {
 		c.ackNeeded = true
 	}
 }
@@ -385,7 +384,7 @@ func (c *Conn) detectLoss(now time.Time) {
 	rto := c.rtt.rto()
 
 	for pn, sp := range c.unacked {
-		byCount := c.haveAcked && pn + lossThreshold <= c.largestAcked
+		byCount := c.haveAcked && pn+lossThreshold <= c.largestAcked
 		byTime := now.Sub(sp.sentAt) > rto
 
 		if !byCount && !byTime {
@@ -427,12 +426,12 @@ func (c *Conn) cleanup(now time.Time) {
 
 func (c *Conn) publishStats() {
 	st := &Stats{
-		RTT: c.rtt.srtt,
-		Cwnd: c.cc.Window(),
+		RTT:      c.rtt.srtt,
+		Cwnd:     c.cc.Window(),
 		InFlight: c.bytesInFlight,
 		LostPkts: c.lostPkts,
 		SentPkts: c.sentPkts,
-		State: "connected",
+		State:    "connected",
 	}
 
 	if c.closed {
@@ -444,14 +443,14 @@ func (c *Conn) publishStats() {
 	c.stats.Store(st)
 }
 
-//========== Sender ==========
+// ========== Sender ==========
 func (c *Conn) flush(now time.Time) {
 	if c.peer == nil {
 		return // server hasn's known client's addr
 	}
 
 	// rwnd = min(cwnd, other_rwnd) - inFlightBytes
-	for min(c.cc.Window(), c.peerWindow) - c.bytesInFlight >= protocol.MaxPacket {
+	for min(c.cc.Window(), c.peerWindow)-c.bytesInFlight >= protocol.MaxPacket {
 		frames := c.takeFrames()
 
 		if len(frames) == 0 {
@@ -519,7 +518,7 @@ func (c *Conn) sendPacket(frames []*protocol.StreamFrame, now time.Time) {
 	pkt := c.seal(pn, payload)
 
 	if _, err := c.sock.WriteToUDP(pkt, c.peer); err != nil {
-		log.Printf("transport: conn %d send packet: %v", c.id,  err)
+		log.Printf("transport: conn %d send packet: %v", c.id, err)
 	}
 
 	c.lastSent = now
@@ -528,7 +527,7 @@ func (c *Conn) sendPacket(frames []*protocol.StreamFrame, now time.Time) {
 	if len(frames) > 0 { // packet that has only ack/ping -> no need to track, no retransmit
 		c.unacked[pn] = &sentPacket{
 			sentAt: now,
-			size: len(pkt),
+			size:   len(pkt),
 			frames: frames,
 		}
 		c.bytesInFlight += len(pkt)
@@ -551,11 +550,11 @@ func (c *Conn) sendClose(reason string) {
 func (c *Conn) seal(pn uint32, payload []byte) []byte {
 	hdr := make([]byte, protocol.HeaderSize)
 	(&protocol.Header{
-		Magic: protocol.Magic,
-		Version: protocol.Version,
-		ConnID:  c.id,
+		Magic:     protocol.Magic,
+		Version:   protocol.Version,
+		ConnID:    c.id,
 		PacketNum: pn,
 	}).Marshal(hdr)
-	dst := append(make([]byte, 0, len(hdr) + len(payload) + protocol.TagSize), hdr...)
+	dst := append(make([]byte, 0, len(hdr)+len(payload)+protocol.TagSize), hdr...)
 	return c.aead.Seal(dst, makeNonce(c.id, pn, c.sendDir), payload, hdr) // dst and hdr are on different heap
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/phongphanhai06/go-collab/internal/client"
+	"github.com/phongphanhai06/go-collab/internal/webui"
 )
 
 func main() {
@@ -17,6 +18,7 @@ func main() {
 	username := flag.String("user", "phong", "Username")
 	password := flag.String("pass", "123456", "Password")
 	loss := flag.Float64("loss", 0, "Tỉ lệ mất gói giả lập khi gửi (0.1 = 10%)")
+	web := flag.String("web", "127.0.0.1:8081", "Địa chỉ Web UI local (rỗng = tắt)")
 	flag.Parse()
 
 	c := client.NewClient(*username)
@@ -24,7 +26,15 @@ func main() {
 		log.Fatalf("Đăng nhập thất bại: %v", err)
 	}
 	fmt.Println("✅ Đăng nhập THÀNH CÔNG!")
-
+	if *web != "" {
+		ui := webui.New(c)
+		go func() {
+			if err := ui.ListenAndServe(*web); err != nil {
+				log.Printf("Web UI lỗi: %v", err)
+			}
+		}()
+		fmt.Printf("🌐 Web UI: http://%s\n", *web)
+	}
 
 	// Loop in Event ra console
 	go func() {
@@ -62,14 +72,14 @@ func main() {
 			err = c.SendDM(parts[1], parts[2])
 		case strings.HasPrefix(line, "/msg "):
 			err = c.SendChat(strings.TrimPrefix(line, "/msg "))
-				case strings.HasPrefix(line, "/file "):
+		case strings.HasPrefix(line, "/file "):
 			parts := strings.Fields(line)
 			to := ""
 			if len(parts) >= 3 {
 				to = parts[2]
 			}
 			path := parts[1]
-			go func() { 
+			go func() {
 				if err := c.SendFile(path, to); err != nil {
 					fmt.Println("\nGửi file lỗi:", err)
 				} else {
@@ -84,4 +94,10 @@ func main() {
 		}
 		fmt.Print("> ")
 	}
+	if *web != "" {
+		fmt.Println("CLI đóng, Web UI vẫn chạy. Ctrl+C để thoát.")
+		select {}
+	}
+	c.Close()
+
 }

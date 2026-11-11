@@ -10,18 +10,18 @@ import (
 )
 
 type inStream struct {
-	kind byte
-	buf []byte
-	hdr protocol.FileHeaderParser
+	kind  byte
+	buf   []byte
+	hdr   protocol.FileHeaderParser
 	relay chan []byte
-	drop bool
+	drop  bool
 }
 
 func (sess *Session) Send(b []byte) bool {
 	select {
 	case sess.sendCh <- b:
 		return true
-	
+
 	default:
 		log.Printf("[Server] Hàng đợi của '%s' đầy, bỏ 1 tin", sess.Username)
 		return false
@@ -35,7 +35,7 @@ func (sess *Session) writeLoop() {
 			if err := sess.EP.SendMessage(b); err != nil {
 				return
 			}
-		case <- sess.EP.Done():
+		case <-sess.EP.Done():
 			return
 		}
 	}
@@ -68,7 +68,6 @@ func (s *Server) serveSession(sess *Session) {
 		s.dropSession(sess)
 	}()
 
-
 	for {
 		select {
 		case d, ok := <-sess.EP.Recv():
@@ -83,7 +82,7 @@ func (s *Server) serveSession(sess *Session) {
 				st = &inStream{kind: d.Data[0]}
 				streams[d.StreamID] = st
 			}
-			
+
 			switch st.kind {
 			case protocol.KindMessage:
 				s.onMessageData(sess, st, d)
@@ -127,7 +126,6 @@ func (s *Server) sendError(to *Session, text string) {
 		to.Send(append([]byte{protocol.KindMessage}, b...))
 	}
 }
-
 
 func (s *Server) routeMessage(from *Session, msg protocol.AppMsg) {
 	msg.TS = time.Now().UnixMilli()

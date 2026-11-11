@@ -6,5 +6,9 @@
   "phan": {
     "salt": "s3cr3t2",
     "hash": "ddc202558db87918bf92da829b4795584acb486d8691e6d2c215d815e5a7dcaf"
+  },
+  "hai": {
+    "salt": "s3cr3t3",
+    "hash": "e583bcb01b74c17f896904bf3ec0ab3fed06a1eb60f7583b83de473a36eca205"
   }
 }

@@ -5,9 +5,9 @@ import "github.com/phongphanhai06/go-collab/internal/protocol"
 const ackHistory = 4096 // remember/ack 4096 closest packet numbers
 
 type ackTracker struct {
-	seen map[uint32]struct{}
+	seen    map[uint32]struct{}
 	largest uint32
-	any bool // receive any packets?
+	any     bool // receive any packets?
 }
 
 func newAcKTracker() ackTracker {
@@ -66,7 +66,7 @@ func (t *ackTracker) ranges(maxRanges int) []protocol.AckRange {
 // prune deletes "pn"s that are too old to prevent map's infinite growth, call regularly
 // The old packet that are retransmitted is considered "new", but recvStream filters it anyway
 func (t *ackTracker) prune() {
-	if len(t.seen) < 2 * ackHistory {
+	if len(t.seen) < 2*ackHistory {
 		return
 	}
 

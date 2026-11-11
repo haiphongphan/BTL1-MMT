@@ -28,7 +28,7 @@ func (s *Server) onFileData(sess *Session, st *inStream, d transport.Delivery) {
 		if meta == nil {
 			break
 		}
-		meta.From = sess.Username 
+		meta.From = sess.Username
 
 		targets := s.fileTargets(sess, meta.To)
 		if len(targets) == 0 {
@@ -65,7 +65,6 @@ func (s *Server) fileTargets(from *Session, to string) []*Session {
 	return out
 }
 
-
 func (s *Server) relayFile(meta protocol.FileMeta, targets []*Session, ch <-chan []byte) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -90,7 +89,7 @@ func (s *Server) relayFile(meta protocol.FileMeta, targets []*Session, ch <-chan
 			}
 			if _, err := w.Write(b); err != nil {
 				log.Printf("[Server] Relay tới %s lỗi: %v", targets[i].Username, err)
-				outs[i] = nil 
+				outs[i] = nil
 			}
 		}
 	}

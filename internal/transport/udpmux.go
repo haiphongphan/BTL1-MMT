@@ -43,14 +43,14 @@ func readLoop(sock PacketConn, lookup func(connID uint32) *Conn) {
 
 // Mux: 1 socket UDP serves many Conn, demux by conn_id (not IP:port).
 type Mux struct {
-	sock PacketConn
-	mu sync.RWMutex
+	sock  PacketConn
+	mu    sync.RWMutex
 	conns map[uint32]*Conn
 }
 
 func NewMux(sock PacketConn) *Mux {
-	m := &Mux {
-		sock: sock,
+	m := &Mux{
+		sock:  sock,
 		conns: map[uint32]*Conn{},
 	}
 	go readLoop(sock, m.lookup)
@@ -114,4 +114,3 @@ func Dial(sock PacketConn, server *net.UDPAddr, connID uint32, key [32]byte) (*C
 
 	return c, nil
 }
-

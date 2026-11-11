@@ -21,13 +21,13 @@ const progressEvery = 200 * time.Millisecond
 
 type FileProgress struct {
 	ID       string `json:"id"`
+	Dir 	 string `json:"dir"`
 	From     string `json:"from"`
 	Name     string `json:"name"`
 	Path     string `json:"path,omitempty"`
 	Received int64  `json:"received"`
 	Size     int64  `json:"size"`
 }
-
 
 func (c *Client) SendFile(path, to string) error {
 	ep := c.endpoint()
@@ -52,26 +52,52 @@ func (c *Client) SendFile(path, to string) error {
 		return err
 	}
 
-	hdr, err := protocol.EncodeFileHeader(protocol.FileMeta{
-		ID:     newID(),
-		From:   c.User,
-		To:     to,
-		Name:   filepath.Base(path),
-		Size:   size,
+	meta := protocol.FileMeta{
+		ID: newID(),
+		From: c.User,
+		To: to,
+		Name: filepath.Base(path),
+		Size: size,
 		SHA256: hex.EncodeToString(h.Sum(nil)),
-	})
+	}
+	hdr, err := protocol.EncodeFileHeader(meta)
 	if err != nil {
 		return err
 	}
 
+	pr := &progressReader{r: f, ev: c.Events, p: FileProgress{ID: meta.ID, Dir: "out", From: c.User, Name: meta.Name, Size: size}}
+	c.Events.Add("file_start", pr.p)
+	
 	st := ep.OpenStream(false) // bulk: ưu tiên thấp hơn chat
 	if _, err := st.Write(hdr); err != nil {
 		return err
 	}
 	if _, err := io.Copy(st, f); err != nil { // lượt 2: gửi, transport tự cắt ≤1000 byte/frame
+		c.Events.Add("file_error", fmt.Sprintf("gửi '%s' lỗi: %v", meta.Name, err))
 		return err
 	}
-	return st.Close() // FIN
+	if err := st.Close(); err != nil {
+		return err
+	}
+
+	c.Events.Add("file_done", pr.p)
+	return nil
+}
+type progressReader struct {
+	r      io.Reader
+	ev     *EventLog
+	p      FileProgress
+	lastEv time.Time
+}
+
+func (pr *progressReader) Read(b []byte) (int, error) {
+	n, err := pr.r.Read(b)
+	pr.p.Received += int64(n)
+	if time.Since(pr.lastEv) >= progressEvery {
+		pr.lastEv = time.Now()
+		pr.ev.Add("file_progress", pr.p)
+	}
+	return n, err
 }
 
 func newID() string {
@@ -79,7 +105,6 @@ func newID() string {
 	rand.Read(b)
 	return hex.EncodeToString(b)
 }
-
 
 type fileRecv struct {
 	hdr      protocol.FileHeaderParser
@@ -169,7 +194,7 @@ func (r *fileRecv) abort() {
 }
 
 func (r *fileRecv) progress() FileProgress {
-	return FileProgress{ID: r.meta.ID, From: r.meta.From, Name: r.meta.Name, Path: r.path, Received: r.received, Size: r.meta.Size}
+	return FileProgress{ID: r.meta.ID, Dir: "in", From: r.meta.From, Name: r.meta.Name, Path: r.path, Received: r.received, Size: r.meta.Size}
 }
 
 func safeName(name string) string {

@@ -16,18 +16,17 @@ import (
 
 const pendingTimeout = 15 * time.Second
 
-
 type UserAccount struct {
 	Salt string `json:"salt"`
 	Hash string `json:"hash"` // sha256(salt + password)
 }
 
 type Server struct {
-	reg *Registry
-	users map[string]UserAccount
+	reg        *Registry
+	users      map[string]UserAccount
 	nextConnID atomic.Uint32
-	udpPort int
-	mux *transport.Mux
+	udpPort    int
+	mux        *transport.Mux
 }
 
 func NewServer(usersFilePath string, udpPort int) (*Server, error) {
@@ -41,8 +40,8 @@ func NewServer(usersFilePath string, udpPort int) (*Server, error) {
 	}
 
 	srv := &Server{
-		reg: NewRegistry(),
-		users: users,
+		reg:     NewRegistry(),
+		users:   users,
 		udpPort: udpPort,
 	}
 	srv.nextConnID.Store(1000) // Khởi tạo ID bắt đầu từ 1000
@@ -62,7 +61,6 @@ func (s *Server) ListenUDP(loss float64) error {
 	log.Printf("[Server] UDP transport running on :%d (loss %.0f%%)", s.udpPort, loss*100)
 	return nil
 }
-
 
 func (s *Server) ListenTCP(addr string) error {
 	ln, err := net.Listen("tcp", addr)
@@ -107,10 +105,10 @@ func (s *Server) handleHandshake(c net.Conn) {
 
 	// Step 2: Gửi KEYX
 	keyx := protocol.KeyX{
-		Type: "KEYX",
+		Type:      "KEYX",
 		ServerPub: priv.PublicKey().Bytes(),
-		ConnID: connID,
-		UDPPort: s.udpPort,
+		ConnID:    connID,
+		UDPPort:   s.udpPort,
 	}
 	if err := protocol.WriteMsg(c, keyx); err != nil {
 		return
@@ -154,7 +152,6 @@ func (s *Server) handleHandshake(c net.Conn) {
 	}
 	log.Printf("[Server] User '%s' authenticated from %s (ConnID: %d)", cred.User, c.RemoteAddr(), connID)
 
-	
 	conn, err := s.mux.Accept(connID, kUDP)
 	if err != nil {
 		s.reg.Remove(sess)
@@ -162,7 +159,6 @@ func (s *Server) handleHandshake(c net.Conn) {
 		return
 	}
 	s.AttachEndpoint(connID, conn)
-
 
 	// Trả AUTH_OK
 	protocol.WriteMsg(c, protocol.AuthResult{

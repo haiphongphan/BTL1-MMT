@@ -23,9 +23,22 @@ type Client struct {
 	online  []string
 	ep      transport.Endpoint
 	closing bool
+	state   string
 	addr    string // lưu lại để reconnect
 	pass    string
 	loss    float64
+}
+
+type Status struct {
+	User     string   `json:"user"`
+	State    string   `json:"state"`
+	Online   []string `json:"online"`
+	RTTms    float64  `json:"rtt_ms"`
+	Cwnd     int      `json:"cwnd"`
+	InFlight int      `json:"in_flight"`
+	SentPkts uint64   `json:"sent_pkts"`
+	LostPkts uint64   `json:"lost_pkts"`
+	LossPct  float64  `json:"loss_pct"`
 }
 
 func NewClient(username string) *Client {
@@ -52,6 +65,32 @@ func (c *Client) endpoint() transport.Endpoint {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.ep
+}
+
+func (c *Client) setState(st string) {
+	c.mu.Lock()
+	c.state = st
+	c.mu.Unlock()
+	c.Events.Add("status", st)
+}
+
+func (c *Client) Status() Status {
+	c.mu.Lock()
+	st := Status{User: c.User, State: c.state, Online: append([]string(nil), c.online...)}
+	ep := c.ep
+	c.mu.Unlock()
+	if st.State == "" {
+		st.State = "disconnected"
+	}
+	if ep != nil {
+		s := ep.Stats()
+		st.RTTms = float64(s.RTT.Microseconds()) / 1000
+		st.Cwnd, st.InFlight, st.SentPkts, st.LostPkts = s.Cwnd, s.InFlight, s.SentPkts, s.LostPkts
+		if s.SentPkts > 0 {
+			st.LossPct = 100 * float64(s.LostPkts) / float64(s.SentPkts)
+		}
+	}
+	return st
 }
 
 func (c *Client) isClosing() bool {
@@ -86,7 +125,7 @@ func (c *Client) dial() error {
 		return err
 	}
 
-	sock, err := net.ListenUDP("udp", nil) 
+	sock, err := net.ListenUDP("udp", nil)
 	if err != nil {
 		return err
 	}
@@ -100,6 +139,7 @@ func (c *Client) dial() error {
 		return err
 	}
 	c.AttachEndpoint(conn)
+	c.setState("connected")
 	return nil
 }
 
@@ -215,10 +255,10 @@ func (c *Client) listenLoop(ep transport.Endpoint) {
 
 		case <-ep.Done():
 			if c.isClosing() {
-				c.Events.Add("status", "disconnected")
+				c.setState("disconnected")
 				return
 			}
-			c.Events.Add("status", "reconnecting")
+			c.setState("reconnecting")
 			go c.reconnectLoop()
 			return
 		}
@@ -236,21 +276,20 @@ func (c *Client) handleMessage(data []byte) {
 	c.Events.Add(msg.Type, msg)
 }
 
-// reconnectLoop thử lại với backoff 1s, 2s, 4s... tối đa 30s.
-// Server coi lần kết nối lại là phiên mới (conn_id mới, khóa mới).
+
 func (c *Client) reconnectLoop() {
 	delay := time.Second
 	for !c.isClosing() {
 		time.Sleep(delay)
-		err := c.dial()
-		if err == nil {
-			c.Events.Add("status", "connected")
-			return
+		if err := c.dial(); err != nil {
+			c.Events.Add("status", fmt.Sprintf("kết nối lại thất bại: %v", err))
+			delay = min(delay*2, 30*time.Second)
+			continue
 		}
-		c.Events.Add("status", fmt.Sprintf("kết nối lại thất bại: %v", err))
-		delay = min(delay*2, 30*time.Second)
+		return
 	}
 }
+
 
 var ErrNotConnected = errors.New("client: chưa có kết nối UDP")
 

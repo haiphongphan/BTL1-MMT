@@ -1,32 +1,32 @@
 package server
 
 import (
+	"errors"
+	"github.com/phongphanhai06/go-collab/internal/transport"
 	"net"
 	"sync"
 	"time"
-	"errors"
-	"github.com/phongphanhai06/go-collab/internal/transport"
 )
 
 type Session struct {
 	Username string
-	ConnID uint32
-	KUDP [32]byte
-	UDPAddr *net.UDPAddr
+	ConnID   uint32
+	KUDP     [32]byte
+	UDPAddr  *net.UDPAddr
 	LastSeen time.Time
-	EP transport.Endpoint
-	sendCh chan []byte 
+	EP       transport.Endpoint
+	sendCh   chan []byte
 }
 
 type Registry struct {
-	mu sync.RWMutex
-	byName map[string]*Session
+	mu       sync.RWMutex
+	byName   map[string]*Session
 	byConnID map[uint32]*Session
 }
 
 func NewRegistry() *Registry {
 	return &Registry{
-		byName: make(map[string]*Session),
+		byName:   make(map[string]*Session),
 		byConnID: make(map[uint32]*Session),
 	}
 }
@@ -37,16 +37,16 @@ func (r *Registry) AddPending(username string, connID uint32, kUDP [32]byte) (*S
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if _, ok:= r.byName[username]; ok {
+	if _, ok := r.byName[username]; ok {
 		return nil, ErrAlreadyOnline
 	}
 
 	sess := &Session{
 		Username: username,
-		ConnID: connID,
-		KUDP: kUDP,
+		ConnID:   connID,
+		KUDP:     kUDP,
 		LastSeen: time.Now(),
-		sendCh: make(chan []byte, 64),
+		sendCh:   make(chan []byte, 64),
 	}
 	r.byName[username] = sess
 	r.byConnID[connID] = sess

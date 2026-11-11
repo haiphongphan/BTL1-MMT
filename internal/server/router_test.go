@@ -1,12 +1,12 @@
 package server
 
 import (
+	"bytes"
+	"crypto/rand"
 	"encoding/json"
 	"strconv"
 	"testing"
 	"time"
-	"bytes"
-	"crypto/rand"
 
 	"github.com/phongphanhai06/go-collab/internal/protocol"
 	"github.com/phongphanhai06/go-collab/internal/transport"
@@ -157,7 +157,6 @@ func TestFileToOfflineUserReturnsError(t *testing.T) {
 	st.Close()
 	next(t, alice, "error")
 }
-
 
 // Step 7: client chết → server xóa session và báo cho người còn lại
 func TestDisconnectBroadcastsUsers(t *testing.T) {

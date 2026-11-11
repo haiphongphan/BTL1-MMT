@@ -24,7 +24,6 @@ type FileHeaderParser struct {
 	buf []byte
 }
 
-
 func (p *FileHeaderParser) Feed(b []byte) (meta *FileMeta, rest []byte, err error) {
 	p.buf = append(p.buf, b...)
 	if len(p.buf) < 5 {

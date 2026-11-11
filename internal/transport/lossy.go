@@ -7,20 +7,20 @@ import (
 )
 
 type PacketConn interface {
-	ReadFromUDP (b []byte) (int, *net.UDPAddr, error)
-	WriteToUDP (b []byte, addr *net.UDPAddr) (int, error)
+	ReadFromUDP(b []byte) (int, *net.UDPAddr, error)
+	WriteToUDP(b []byte, addr *net.UDPAddr) (int, error)
 	Close() error
 }
 
 // LossyConn wraps a real UDPConn, intentionally lose/delay packet from the sending end
 type LossyConn struct {
 	*net.UDPConn
-	Loss float64
-	Delay time.Duration
+	Loss   float64
+	Delay  time.Duration
 	Jitter time.Duration
 }
 
-func (l *LossyConn) WriteToUDP (b []byte, addr *net.UDPAddr) (int, error) {
+func (l *LossyConn) WriteToUDP(b []byte, addr *net.UDPAddr) (int, error) {
 	if rand.Float64() < l.Loss {
 		return len(b), nil // lose package, pretend to finish sending
 	}
@@ -40,4 +40,3 @@ func (l *LossyConn) WriteToUDP (b []byte, addr *net.UDPAddr) (int, error) {
 
 	return len(b), nil
 }
-
