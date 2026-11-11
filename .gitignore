@@ -2,3 +2,9 @@ KE_HOACH_BTL1_GO.md
 PHAN_CONG_BTL1.md
 echo_tcp.go
 echo_udp.go
+
+bin/
+logs/
+downloads/
+*.bin
+*.csv

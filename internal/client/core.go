@@ -276,7 +276,6 @@ func (c *Client) handleMessage(data []byte) {
 	c.Events.Add(msg.Type, msg)
 }
 
-
 func (c *Client) reconnectLoop() {
 	delay := time.Second
 	for !c.isClosing() {
@@ -289,7 +288,6 @@ func (c *Client) reconnectLoop() {
 		return
 	}
 }
-
 
 var ErrNotConnected = errors.New("client: chưa có kết nối UDP")
 
