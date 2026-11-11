@@ -14,6 +14,9 @@ import (
 	"github.com/phongphanhai06/go-collab/internal/transport"
 )
 
+const pendingTimeout = 15 * time.Second
+
+
 type UserAccount struct {
 	Salt string `json:"salt"`
 	Hash string `json:"hash"` // sha256(salt + password)
@@ -128,14 +131,19 @@ func (s *Server) handleHandshake(c net.Conn) {
 		return
 	}
 
-	if s.reg.GetByName(cred.User) != nil {
+	sess, err := s.reg.AddPending(cred.User, connID, kUDP)
+	if err != nil {
 		protocol.WriteMsg(c, protocol.AuthResult{Type: "AUTH_FAIL", Reason: "Tài khoản đang online ở máy khác"})
 		return
 	}
+	log.Printf("[Server] User '%s' authenticated from %s (ConnID: %d)", cred.User, c.RemoteAddr(), connID)
 
-	// Thêm vào Pending Registry
-	s.reg.AddPending(cred.User, connID, kUDP)
-	log.Printf("[Server] User '%s' authenticated successfully (ConnID: %d)", cred.User, connID)
+	// Quá hạn mà client chưa gửi gói UDP đầu tiên → hủy session, cho phép đăng nhập lại
+	time.AfterFunc(pendingTimeout, func() {
+		if s.reg.RemoveIfPending(sess) {
+			log.Printf("[Server] User '%s' pending quá hạn, đã hủy", sess.Username)
+		}
+	})
 
 	// Trả AUTH_OK
 	protocol.WriteMsg(c, protocol.AuthResult{

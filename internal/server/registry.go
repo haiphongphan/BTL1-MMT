@@ -4,6 +4,7 @@ import (
 	"net"
 	"sync"
 	"time"
+	"errors"
 	"github.com/phongphanhai06/go-collab/internal/transport"
 )
 
@@ -14,6 +15,7 @@ type Session struct {
 	UDPAddr *net.UDPAddr
 	LastSeen time.Time
 	EP transport.Endpoint
+	sendCh chan []byte 
 }
 
 type Registry struct {
@@ -29,19 +31,26 @@ func NewRegistry() *Registry {
 	}
 }
 
-func (r *Registry) AddPending(username string, connID uint32, kUDP [32]byte) *Session {
+var ErrAlreadyOnline = errors.New("registry: user đang online")
+
+func (r *Registry) AddPending(username string, connID uint32, kUDP [32]byte) (*Session, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	if _, ok:= r.byName[username]; ok {
+		return nil, ErrAlreadyOnline
+	}
 
 	sess := &Session{
 		Username: username,
 		ConnID: connID,
 		KUDP: kUDP,
 		LastSeen: time.Now(),
+		sendCh: make(chan []byte, 64),
 	}
 	r.byName[username] = sess
 	r.byConnID[connID] = sess
-	return sess
+	return sess, nil
 }
 
 func (r *Registry) GetByName(name string) *Session {
@@ -56,14 +65,38 @@ func (r *Registry) GetByConnID(connID uint32) *Session {
 	return r.byConnID[connID]
 }
 
-func (r *Registry) Remove(username string) {
+func (r *Registry) Attach(connID uint32, ep transport.Endpoint) *Session {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	sess := r.byConnID[connID]
+	if sess == nil || sess.EP != nil {
+		return nil
+	}
+	sess.EP = ep
+	return sess
+}
+
+func (r *Registry) Remove(sess *Session) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if sess, ok := r.byName[username]; ok {
-		delete(r.byName, username)
-		delete(r.byConnID, sess.ConnID)
+	if r.byName[sess.Username] != sess {
+		return false
 	}
+	delete(r.byName, sess.Username)
+	delete(r.byConnID, sess.ConnID)
+	return true
+}
+
+func (r *Registry) RemoveIfPending(sess *Session) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if sess.EP != nil || r.byName[sess.Username] != sess {
+		return false
+	}
+	delete(r.byName, sess.Username)
+	delete(r.byConnID, sess.ConnID)
+	return true
 }
 
 func (r *Registry) Names() []string {
@@ -83,7 +116,9 @@ func (r *Registry) Snapshot() []*Session {
 
 	list := make([]*Session, 0, len(r.byName))
 	for _, sess := range r.byName {
-		list = append(list, sess)
+		if sess.EP != nil {
+			list = append(list, sess)
+		}
 	}
 	return list
 }

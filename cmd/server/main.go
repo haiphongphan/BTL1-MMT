@@ -3,6 +3,8 @@ package main
 import (
 	"flag"
 	"log"
+	"context"
+	"net"
 
 	"github.com/phongphanhai06/go-collab/internal/server"
 )
@@ -21,4 +23,18 @@ func main() {
 	if err := srv.ListenTCP(*tcpAddr); err != nil {
 		log.Fatalf("Server TCP ngưng hoạt động: %v", err)
 	}
+
+	go srv.StartDiscovery(context.Background(), localIP())
+
+	if err := srv.ListenTCP(*tcpAddr); err != nil {
+		log.Fatalf("Server TCP ngưng hoạt động: %v", err)
+	}
+}
+func localIP() string {
+	c, err := net.Dial("udp4", "8.8.8.8:80")
+	if err != nil {
+		return "127.0.0.1"
+	}
+	defer c.Close()
+	return c.LocalAddr().(*net.UDPAddr).IP.String()
 }
