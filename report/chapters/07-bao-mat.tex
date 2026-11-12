@@ -1,0 +1,61 @@
+\section{Bảo mật}
+\label{sec:bao-mat}
+
+\subsection{Trao đổi khóa}
+Mỗi phiên, client và server sinh một cặp khóa X25519 tạm thời \cite{rfc7748} và trao đổi khóa công khai trong
+\texttt{HELLO}/\texttt{KEYX} (\cref{subsec:handshake}). Bí mật chung không bao giờ đi trên dây; kẻ nghe lén chỉ
+thấy hai khóa công khai. Vì khóa là tạm thời (\emph{ephemeral}), lộ một khóa sau này không giải mã được các phiên
+đã ghi lại trước đó (\emph{forward secrecy}). Mật khẩu chỉ lên dây sau khi đã được mã hóa bằng $k_\text{tcp}$.
+
+\subsection{Mã hóa gói UDP}
+Mọi gói UDP được mã hóa bằng AES-256-GCM \cite{gcm} với khóa $k_\text{udp}$. GCM là mã hóa có xác thực
+(AEAD): ngoài việc giấu nội dung, nó kèm một tag 16 byte, sửa bất kỳ bit nào của gói thì giải mã thất bại.
+
+\paragraph{Header là AAD.} 12 byte header phải gửi rõ (bên nhận cần \texttt{conn\_id} để biết dùng khóa nào,
+\texttt{packet\_num} để tính nonce), nhưng được đưa vào GCM làm \emph{additional authenticated data}: không bị
+mã hóa nhưng được xác thực. Kẻ tấn công đổi \texttt{conn\_id} hay \texttt{packet\_num} thì gói bị bỏ.
+
+\paragraph{Nonce không bao giờ lặp.} GCM có một điều kiện bắt buộc: không bao giờ dùng lại một nonce với cùng
+một khóa. Lặp nonce làm lộ XOR của hai bản rõ và cho phép giả mạo tag. Nonce 12 byte được tính từ header, không cần
+gửi kèm:
+\begin{center}
+  \texttt{nonce = conn\_id (4) \,\textbar\, packet\_num (4) \,\textbar\, chiều (1) \,\textbar\, 0 0 0}
+\end{center}
+Trong một kết nối, \texttt{packet\_num} tăng mãi và gửi lại cũng dùng số mới (\cref{subsec:goi}). Byte
+\emph{chiều} (0 = client $\to$ server, 1 = server $\to$ client) cần thiết vì cả hai bên đều đánh
+\texttt{packet\_num} từ 0 với cùng khóa $k_\text{udp}$; thiếu byte này thì gói số 5 của client và gói số 5 của
+server dùng chung nonce (thử thách~\ref{tt:nonce}).
+
+\paragraph{Xử lý gói không hợp lệ.} Gói sai magic/version, \texttt{conn\_id} không tồn tại, hoặc giải mã thất
+bại đều bị bỏ im lặng, không trả lời gì (không cho kẻ tấn công thông tin phản hồi) và không làm ngắt kết nối thật.
+Địa chỉ UDP của bên kia chỉ được cập nhật theo gói \emph{mới nhất đã qua xác thực GCM}, nên kẻ tấn công phát lại
+một gói cũ từ địa chỉ khác không thể kéo kết nối về địa chỉ của mình. Gói phát lại cũng không làm ứng dụng nhận
+trùng dữ liệu: \texttt{packet\_num} đã thấy thì không xử lý lại dữ liệu, và offset đã giao thì bị bỏ.
+
+\subsection{Kiểm chứng}
+\begin{itemize}
+  \item \fname{TestWireIsEncrypted}: ghi lại mọi byte client đưa lên socket trong khi gửi một tin chứa chuỗi đánh
+        dấu, rồi tìm chuỗi đó trong các gói: không thấy. Mọi gói đều đúng định dạng và $\le$ 1200 byte.
+  \item \fname{TestTamperedPacketRejected}: lật từng byte của gói (cả header lẫn phần mã hóa): mọi trường hợp
+        đều giải mã thất bại.
+  \item \fname{TestWrongDirectionRejected}, \fname{TestNonceUniquePerDirectionAndPN}: gói của chiều này không
+        giải mã được bằng nonce của chiều kia; nonce khác nhau với mọi cặp (chiều, \texttt{packet\_num}).
+  \item \fname{TestDeriveKeysBothSidesAgree}, \fname{TestDeriveKeysRejectsBadPublicKey}: hai bên tính ra cùng
+        $k_\text{tcp}$, $k_\text{udp}$; khóa công khai sai độ dài bị từ chối.
+\end{itemize}
+
+\phanB{Ảnh chụp Wireshark (bộ lọc \texttt{tcp.port == 9000 \textbar\textbar{} udp.port == 9001}): (1) message \texttt{AUTH}
+chỉ thấy chuỗi base64 của \texttt{sealed}, không thấy mật khẩu; (2) payload UDP không đọc được nội dung tin chat.
+Mô tả cách server lưu mật khẩu (\texttt{users.json}) và chống giả danh (server ghi đè trường \texttt{From}).}
+
+\subsection{Giới hạn đã biết}
+\begin{itemize}
+  \item \textbf{Chưa xác thực server.} Server không có chứng chỉ, nên ECDH chưa chứng minh được ``đang nói chuyện
+        với đúng server''. Kẻ tấn công chen được vào đường truyền ngay lúc handshake có thể đóng vai
+        \emph{man-in-the-middle}. Khắc phục: server ký \texttt{server\_pub} bằng một khóa dài hạn mà client biết
+        trước, như chứng chỉ trong TLS.
+  \item \textbf{KDF đơn giản.} Khóa được tách bằng $\mathrm{SHA256}(\mathit{shared} \| \text{nhãn})$; sản phẩm
+        thật nên dùng HKDF.
+  \item \textbf{Header gửi rõ.} Người nghe lén thấy \texttt{conn\_id}, \texttt{packet\_num} và kích thước gói,
+        nên biết được lưu lượng của mỗi kết nối, dù không đọc được nội dung.
+\end{itemize}

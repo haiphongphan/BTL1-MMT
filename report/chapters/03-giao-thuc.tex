@@ -1,0 +1,189 @@
+\section{Đặc tả giao thức}
+\label{sec:giao-thuc}
+
+Giao thức gồm hai giai đoạn: \textbf{handshake trên TCP} (trao đổi khóa và đăng nhập, xong thì đóng) và
+\textbf{truyền dữ liệu trên UDP} (chat, DM, file, ACK, keep-alive). Mọi số nguyên trên dây đều là
+\emph{big-endian}. Định nghĩa đầy đủ nằm trong \fname{internal/protocol} và \fname{docs/protocol.md}.
+
+\subsection{Cổng}
+\begin{table}[H]
+  \centering
+  \caption{Các cổng sử dụng}
+  \label{tab:cong}
+  \begin{tabularx}{\linewidth}{llY}
+    \toprule
+    \textbf{Cổng} & \textbf{Giao thức} & \textbf{Dùng cho} \\
+    \midrule
+    9000 & TCP & Handshake: trao đổi khóa, đăng nhập (đóng sau khi xong) \\
+    9001 & UDP & Toàn bộ dữ liệu: message, file, ACK, PING, CLOSE \\
+    9002 & UDP broadcast & Server quảng bá địa chỉ trong LAN để client tự tìm \\
+    8080+ & TCP (HTTP tự viết) & Web UI của từng client, chỉ lắng nghe trên \texttt{127.0.0.1} \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\subsection{Handshake TCP}
+\label{subsec:handshake}
+Mỗi message handshake có dạng \texttt{[4 byte độ dài][JSON]}. Độ dài bị giới hạn 1 MB: độ dài do bên kia tự
+khai, nếu không giới hạn thì kẻ xấu chỉ cần gửi độ dài 4 GB là làm server cấp phát hết bộ nhớ.
+
+\begin{table}[H]
+  \centering
+  \caption{Các message handshake}
+  \label{tab:handshake}
+  \begin{tabularx}{\linewidth}{clL{0.2\linewidth}Y}
+    \toprule
+    \textbf{\#} & \textbf{Hướng} & \textbf{Message} & \textbf{Nội dung} \\
+    \midrule
+    1 & C $\to$ S & \texttt{HELLO} & \texttt{client\_pub}: khóa công khai X25519 (tạm, mỗi phiên một khóa) \\
+    2 & S $\to$ C & \texttt{KEYX} & \texttt{server\_pub}, \texttt{conn\_id} (định danh kết nối UDP),
+    \texttt{udp\_port} \\
+    3 & C $\to$ S & \texttt{AUTH} & \texttt{nonce} 12 byte ngẫu nhiên, \texttt{sealed} =
+    AES-GCM$_{k_\text{tcp}}$(\{user, pass\}) \\
+    4 & S $\to$ C & \texttt{AUTH\_OK} / \texttt{AUTH\_FAIL} & danh sách user online / lý do từ chối \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+Sau bước 2, hai bên tự tính cùng một bí mật chung mà không ai gửi nó qua mạng, rồi tách ra hai khóa:
+\begin{align}
+  \mathit{shared} &= \mathrm{X25519}(\mathit{priv}, \mathit{peerPub}) \\
+  k_\text{tcp} &= \mathrm{SHA256}(\mathit{shared} \,\|\, \texttt{tcp}) \quad
+    \text{mã hóa user/password trong \texttt{AUTH}} \\
+  k_\text{udp} &= \mathrm{SHA256}(\mathit{shared} \,\|\, \texttt{udp}) \quad
+    \text{mã hóa mọi gói UDP}
+\end{align}
+Dùng hai khóa riêng để hai kênh có cách sinh nonce khác nhau (TCP: nonce ngẫu nhiên; UDP: nonce từ header) không
+bao giờ dùng chung một khóa. Sau \texttt{AUTH\_OK}, kết nối TCP đóng; client gửi gói UDP đầu tiên (PING) mang
+\texttt{conn\_id} để server biết địa chỉ UDP của mình.
+
+\subsection{Gói UDP}
+\label{subsec:goi}
+
+\begin{figure}[H]
+  \centering
+  \begin{tikzpicture}[x=0.82cm,y=1cm,font=\small]
+    \foreach \xa/\xb/\fld/\sub in {0/2/{magic}/{0xC0DE},2/3/{ver}/{1},3/4/{flg}/{},4/6.5/{conn\_id}/{uint32},
+      6.5/9/{packet\_num}/{uint32}} {
+      \draw[fill=blue!8] (\xa,0) rectangle (\xb,1);
+      \node[font=\footnotesize] at ({(\xa+\xb)/2},0.65) {\texttt{\fld}};
+      \node[font=\scriptsize] at ({(\xa+\xb)/2},0.25) {\sub};
+    }
+    \draw[fill=orange!10] (9,0) rectangle (14.5,1);
+    \node at (11.75,0.65) {frame (đã mã hóa)};
+    \node[font=\scriptsize] at (11.75,0.25) {$\le$ 1172 byte};
+    \draw[fill=gray!15] (14.5,0) rectangle (16,1);
+    \node at (15.25,0.5) {tag};
+    \foreach \x/\l in {0/0,2/2,3/3,4/4,6.5/8,9/12} \node[font=\scriptsize,above] at (\x,1) {\l};
+    \draw[decorate,decoration={brace,amplitude=5pt,mirror}] (0,-0.1) -- (9,-0.1)
+      node[midway,below=6pt,font=\scriptsize] {header 12 byte: gửi rõ, là AAD của AES-GCM};
+    \draw[decorate,decoration={brace,amplitude=5pt,mirror}] (14.5,-0.1) -- (16,-0.1)
+      node[midway,below=6pt,font=\scriptsize] {16 byte};
+  \end{tikzpicture}
+  \caption{Cấu trúc một gói UDP (tổng $\le$ 1200 byte)}
+  \label{fig:goi}
+\end{figure}
+
+\begin{itemize}
+  \item \textbf{Kích thước $\le$ 1200 byte} để không bị phân mảnh IP trên mọi đường truyền (MTU tối thiểu của
+        IPv6 là 1280 byte, trừ header IP/UDP), giống QUIC \cite{rfc9000}. Phần frame còn lại
+        $1200 - 12 - 16 = 1172$ byte.
+  \item \texttt{magic} và \texttt{ver} giúp loại nhanh gói không thuộc giao thức trước khi tốn công giải mã.
+  \item \texttt{conn\_id} cho biết gói thuộc kết nối nào: server dùng chung một socket UDP cho mọi client và
+        tra \texttt{conn\_id} để chuyển gói tới đúng kết nối, nên client đổi địa chỉ (NAT) vẫn nhận ra.
+  \item \texttt{packet\_num} \textbf{tăng mãi, không bao giờ dùng lại}, kể cả khi gửi lại: dữ liệu của gói bị mất
+        được đóng vào gói mới với số mới. Nhờ vậy mỗi ACK chỉ khớp đúng một lần gửi, đo RTT không bao giờ mập mờ
+        (không cần thuật toán Karn như TCP), và nonce mã hóa không bao giờ lặp (\cref{sec:bao-mat}).
+\end{itemize}
+
+\subsection{Frame}
+\label{subsec:frame}
+Phần đã mã hóa của gói chứa một hoặc nhiều frame xếp liền nhau. Bên nhận đọc byte \texttt{type} để biết độ dài
+frame, cắt ra, rồi đọc tiếp tới hết. Nhờ vậy một gói có thể vừa mang dữ liệu vừa mang ACK (\emph{piggyback}).
+
+\begin{table}[H]
+  \centering
+  \caption{Bốn loại frame}
+  \label{tab:frame}
+  \begin{tabularx}{\linewidth}{clL{0.3\linewidth}cY}
+    \toprule
+    \textbf{Type} & \textbf{Tên} & \textbf{Cấu trúc (byte)} & \textbf{ACK?} & \textbf{Ý nghĩa} \\
+    \midrule
+    0x01 & STREAM & \texttt{type(1) flags(1) stream\_id(4) offset(4) len(2) data} & Có &
+    1 đoạn dữ liệu ($\le$ 1000 byte) của 1 stream; bit 0 của \texttt{flags} = FIN \\
+    0x02 & ACK & \texttt{type(1) window(4) n(1)} $n \times$ \texttt{[start(4) end(4)]} & Không &
+    SACK theo \texttt{packet\_num} ($n \le 8$) + cửa sổ nhận \\
+    0x03 & PING & \texttt{type(1)} & Có & Giữ kết nối, báo địa chỉ client cho server \\
+    0x04 & CLOSE & \texttt{type(1) reason\_len(1) reason} & Không & Đóng ngay, không chờ timeout \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\paragraph{STREAM.} Một \emph{stream} là một dãy byte có thứ tự (một tin nhắn, hoặc một file). Nhiều stream
+chạy song song trong cùng một kết nối. \texttt{offset} là vị trí byte đầu tiên của \texttt{data} trong stream,
+bên nhận ghép lại theo offset. Client đánh \texttt{stream\_id} lẻ (1, 3, 5\dots), server đánh số chẵn, nên hai
+bên mở stream đồng thời cũng không bao giờ trùng số. Mỗi frame mang tối đa 1000 byte dữ liệu để gói còn chỗ ghép
+thêm một ACK (tối đa 70 byte).
+
+\paragraph{ACK.} Liệt kê các khoảng \texttt{packet\_num} đã nhận, sắp giảm dần, khoảng đầu tiên kết thúc ở gói
+lớn nhất. Ví dụ đã nhận gói 1--5, 7--9 và 12:
+\begin{center}
+  \texttt{[0x02][window=48000][n=3][12,12][7,9][1,5]} \quad (30 byte; thiếu 6, 10, 11)
+\end{center}
+Đây là \emph{selective ACK}: bên gửi biết chính xác gói nào thiếu và chỉ gửi lại dữ liệu của gói đó.
+\texttt{window} là số byte bên nhận còn trống, dùng cho điều khiển luồng (\cref{subsec:dieu-toc}).
+Gói chỉ chứa ACK thì không được ACK lại, nếu không hai bên sẽ ACK qua lại vô hạn.
+
+\paragraph{CLOSE.} \texttt{reason} là chuỗi UTF-8 tối đa 255 byte; bên gửi tự cắt nếu dài hơn, và cắt đúng
+ranh giới ký tự để không làm hỏng ký tự nhiều byte.
+
+\subsection{Nội dung stream (tầng ứng dụng)}
+\label{subsec:app}
+Byte đầu tiên của mỗi stream cho biết loại:
+\begin{center}
+  \small
+  \begin{tabular}{ll}
+    MESSAGE: & \texttt{[0x01][JSON AppMsg \dots{} tới hết stream]} \\
+    FILE: & \texttt{[0x02][meta\_len u32][JSON FileMeta][dữ liệu file \dots]}
+  \end{tabular}
+\end{center}
+
+\begin{lstlisting}[caption={Cấu trúc nội dung tầng ứng dụng (\fname{appmsg.go}, rút gọn)},
+  label=lst:appmsg]
+type AppMsg struct {
+	Type  string   `json:"type"` // chat | dm | users | join | leave | error
+	From  string   `json:"from,omitempty"`
+	To    string   `json:"to,omitempty"`
+	Text  string   `json:"text,omitempty"`
+	Users []string `json:"users,omitempty"`
+	TS    int64    `json:"ts"`            // UnixMilli
+	Seq   uint64   `json:"seq,omitempty"` // per-connection message number
+}
+
+type FileMeta struct {
+	ID, From, To, Name string
+	Size   int64
+	SHA256 string // hex; receiver re-hashes the file to verify it
+}
+\end{lstlisting}
+
+Meta của file đi \textbf{chung stream} với dữ liệu file thay vì gửi bằng một message riêng, vì giữa các stream
+không có thứ tự: nếu tách ra thì dữ liệu file có thể tới trước meta. Bên nhận đọc meta theo từng byte tới
+(\fname{FileHeaderParser}), không cần chờ cả file. SHA-256 của toàn bộ file đi trong meta để bên nhận kiểm tra file
+nguyên vẹn đầu cuối, độc lập với tầng transport.
+
+\paragraph{Thứ tự tin nhắn (\texttt{Seq}).} Mỗi tin là một stream riêng để tin này không phải chờ tin kia
+(\cref{sec:hol}); hệ quả là khi mất gói, tin \#2 có thể giao trước tin \#1. Để vẫn giao đúng thứ tự gửi, mỗi bên
+gửi đánh \texttt{Seq} = 1, 2, 3\dots{} theo từng kết nối, và bên nhận dùng \fname{protocol.SeqBuffer}: tin tới
+sớm được giữ lại tới khi các tin trước đủ, tin trùng bị bỏ, \texttt{Seq} = 0 được giao ngay. Nếu giữ quá 4096 tin
+(chỉ xảy ra khi có lỗi) thì bỏ qua chỗ trống để không treo vĩnh viễn. File không cần cơ chế này vì mỗi file là
+một stream, tầng transport đã giao đúng thứ tự theo offset.
+
+\phanB{Mô tả cách client và server dùng \texttt{Seq}/\texttt{SeqBuffer} (đánh số ở đâu, hàng đợi gửi của server
+xử lý thế nào khi đầy) sau khi tích hợp xong.}
+
+\subsection{State diagram}
+\label{subsec:state}
+\phanB{State diagram của client (và của session phía server): \textsc{Discovering} $\to$ \textsc{Handshake}
+$\to$ \textsc{Connected} $\to$ \textsc{Reconnecting}/\textsc{Closed}. Trạng thái của kết nối transport
+(\texttt{waiting}/\texttt{connected}/\texttt{closed}) có trong \fname{transport.Stats.State}.}
