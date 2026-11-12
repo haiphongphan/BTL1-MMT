@@ -87,6 +87,7 @@ func (s *Server) apiSend(req *Request) Response {
 	return jsonResp(200, map[string]bool{"ok": true})
 }
 
+
 func (s *Server) apiUpload(req *Request) Response {
 	if req.Method != "POST" {
 		return jsonErr(405, "POST only")
@@ -118,7 +119,7 @@ func (s *Server) apiUpload(req *Request) Response {
 	}
 
 	to := q.Get("to")
-	go func() {
+	go func() { 
 		defer os.RemoveAll(dir)
 		if err := s.c.SendFile(tmp, to); err != nil {
 			log.Printf("[webui] SendFile %s: %v", name, err)

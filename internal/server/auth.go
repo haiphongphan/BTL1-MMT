@@ -1,15 +1,12 @@
-// Package server: handshake TCP + xác thực, registry user, định tuyến chat/DM và chuyển tiếp file.
 package server
 
 import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"log"
 	"net"
 	"os"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -30,12 +27,8 @@ type Server struct {
 	nextConnID atomic.Uint32
 	udpPort    int
 	mux        *transport.Mux
-	// usersMu: đọc danh sách user + xếp tin "users" vào hàng đợi phải là 1 bước. Nếu 2 broadcast chạy xen kẽ
-	// (2 người đăng nhập cùng lúc), bản cũ có thể được xếp SAU bản mới ⇒ client hiển thị sai người online.
-	usersMu sync.Mutex
 }
 
-// NewServer đọc file tài khoản và tạo server (chưa mở cổng nào).
 func NewServer(usersFilePath string, udpPort int) (*Server, error) {
 	data, err := os.ReadFile(usersFilePath)
 	if err != nil {
@@ -55,7 +48,6 @@ func NewServer(usersFilePath string, udpPort int) (*Server, error) {
 	return srv, nil
 }
 
-// ListenUDP mở socket UDP dùng chung cho mọi client; loss > 0 để giả lập mất gói khi gửi.
 func (s *Server) ListenUDP(loss float64) error {
 	sock, err := net.ListenUDP("udp", &net.UDPAddr{Port: s.udpPort})
 	if err != nil {
@@ -65,49 +57,26 @@ func (s *Server) ListenUDP(loss float64) error {
 	if loss > 0 {
 		pc = &transport.LossyConn{UDPConn: sock, Loss: loss}
 	}
-	s.udpPort = sock.LocalAddr().(*net.UDPAddr).Port // -udp-port 0 → cổng do OS chọn (dùng trong test)
 	s.mux = transport.NewMux(pc)
 	log.Printf("[Server] UDP transport running on :%d (loss %.0f%%)", s.udpPort, loss*100)
 	return nil
 }
 
-// ListenTCP nghe handshake trên addr; chặn cho tới khi lỗi.
 func (s *Server) ListenTCP(addr string) error {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
 	}
-	return s.Serve(ln)
-}
+	log.Printf("[Server] TCP Handshake server running on %s", addr)
 
-// Serve nhận kết nối handshake trên ln cho tới khi ln bị đóng.
-func (s *Server) Serve(ln net.Listener) error {
-	log.Printf("[Server] TCP Handshake server running on %s", ln.Addr())
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			if errors.Is(err, net.ErrClosed) {
-				return err
-			}
 			log.Printf("[Server] Accept err: %v", err)
 			continue
 		}
 		go s.handleHandshake(conn) // Mỗi client 1 goroutine độc lập
 	}
-}
-
-// OnlineCount: số user đang đăng nhập.
-func (s *Server) OnlineCount() int { return len(s.reg.Names()) }
-
-// UDPPort: cổng UDP thật đang nghe (khác cấu hình khi cấu hình là 0).
-func (s *Server) UDPPort() int { return s.udpPort }
-
-// Close đóng socket UDP và mọi kết nối transport (dùng trong test).
-func (s *Server) Close() error {
-	if s.mux == nil {
-		return nil
-	}
-	return s.mux.Close()
 }
 
 func (s *Server) handleHandshake(c net.Conn) {

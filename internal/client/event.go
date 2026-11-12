@@ -14,12 +14,10 @@ type EventLog struct {
 	items []Event
 }
 
-// NewEventLog tạo EventLog rỗng.
 func NewEventLog() *EventLog {
 	return &EventLog{items: make([]Event, 0, 100)}
 }
 
-// Add thêm 1 sự kiện với số thứ tự tăng dần; chỉ giữ 2000 sự kiện gần nhất.
 func (l *EventLog) Add(eventType string, data any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -30,7 +28,6 @@ func (l *EventLog) Add(eventType string, data any) {
 	}
 }
 
-// Since trả về các sự kiện có Seq > s (Web UI hỏi định kỳ với Seq cuối cùng đã thấy).
 func (l *EventLog) Since(s int64) []Event {
 	l.mu.Lock()
 	defer l.mu.Unlock()

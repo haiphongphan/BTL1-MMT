@@ -21,7 +21,7 @@ const progressEvery = 200 * time.Millisecond
 
 type FileProgress struct {
 	ID       string `json:"id"`
-	Dir      string `json:"dir"`
+	Dir 	 string `json:"dir"`
 	From     string `json:"from"`
 	Name     string `json:"name"`
 	Path     string `json:"path,omitempty"`
@@ -29,8 +29,6 @@ type FileProgress struct {
 	Size     int64  `json:"size"`
 }
 
-// SendFile gửi file qua server tới user to ("" = mọi người). Đọc file 2 lượt: lượt 1 tính SHA-256
-// (meta phải đi trước dữ liệu), lượt 2 gửi trên 1 stream bulk; phát sự kiện file_start/progress/done.
 func (c *Client) SendFile(path, to string) error {
 	ep := c.endpoint()
 	if ep == nil {
@@ -55,11 +53,11 @@ func (c *Client) SendFile(path, to string) error {
 	}
 
 	meta := protocol.FileMeta{
-		ID:     newID(),
-		From:   c.User,
-		To:     to,
-		Name:   filepath.Base(path),
-		Size:   size,
+		ID: newID(),
+		From: c.User,
+		To: to,
+		Name: filepath.Base(path),
+		Size: size,
 		SHA256: hex.EncodeToString(h.Sum(nil)),
 	}
 	hdr, err := protocol.EncodeFileHeader(meta)
@@ -69,7 +67,7 @@ func (c *Client) SendFile(path, to string) error {
 
 	pr := &progressReader{r: f, ev: c.Events, p: FileProgress{ID: meta.ID, Dir: "out", From: c.User, Name: meta.Name, Size: size}}
 	c.Events.Add("file_start", pr.p)
-
+	
 	st := ep.OpenStream(false) // bulk: ưu tiên thấp hơn chat
 	if _, err := st.Write(hdr); err != nil {
 		return err
@@ -85,7 +83,6 @@ func (c *Client) SendFile(path, to string) error {
 	c.Events.Add("file_done", pr.p)
 	return nil
 }
-
 type progressReader struct {
 	r      io.Reader
 	ev     *EventLog
@@ -93,7 +90,6 @@ type progressReader struct {
 	lastEv time.Time
 }
 
-// Read đọc từ file và phát sự kiện file_progress tối đa mỗi progressEvery.
 func (pr *progressReader) Read(b []byte) (int, error) {
 	n, err := pr.r.Read(b)
 	pr.p.Received += int64(n)

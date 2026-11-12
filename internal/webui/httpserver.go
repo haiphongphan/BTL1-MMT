@@ -1,4 +1,3 @@
-// Package webui là HTTP server tự viết trên socket TCP, phục vụ trang tĩnh (JS thuần) và API JSON cho client.
 package webui
 
 import (
@@ -18,12 +17,11 @@ import (
 //go:embed static
 var static embed.FS
 
-const maxHeaderLine = 8 << 10
-
+const maxHeaderLine = 8 << 10 
 type Request struct {
 	Method, Path, RawQuery string
 	Headers                map[string]string
-	Body                   io.Reader
+	Body                   io.Reader 
 	ContentLength          int64
 }
 
@@ -37,10 +35,8 @@ type Server struct {
 	c *client.Client
 }
 
-// New tạo Web UI cho client c.
 func New(c *client.Client) *Server { return &Server{c: c} }
 
-// ListenAndServe nghe HTTP trên addr (HTTP/1.1 tự viết trên socket TCP, mỗi kết nối 1 goroutine).
 func (s *Server) ListenAndServe(addr string) error {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -59,13 +55,13 @@ func (s *Server) ListenAndServe(addr string) error {
 
 func (s *Server) handleConn(conn net.Conn) {
 	defer conn.Close()
-	defer func() {
+	defer func() { 
 		if r := recover(); r != nil {
 			log.Printf("[webui] panic: %v", r)
 			writeResponse(conn, Response{500, "text/plain", []byte("internal error")})
 		}
 	}()
-	conn.SetDeadline(time.Now().Add(10 * time.Minute))
+	conn.SetDeadline(time.Now().Add(10 * time.Minute)) 
 
 	req, err := readRequest(bufio.NewReader(conn))
 	if err != nil {
@@ -76,7 +72,7 @@ func (s *Server) handleConn(conn net.Conn) {
 }
 
 func readRequest(r *bufio.Reader) (*Request, error) {
-	line, err := readLine(r)
+	line, err := readLine(r) 
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +102,7 @@ func readRequest(r *bufio.Reader) (*Request, error) {
 		}
 		req.ContentLength = n
 	}
-	req.Body = io.LimitReader(r, req.ContentLength)
+	req.Body = io.LimitReader(r, req.ContentLength) 
 	return req, nil
 }
 

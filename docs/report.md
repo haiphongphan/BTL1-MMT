@@ -20,7 +20,7 @@ trên socket TCP.
 | Step | Yêu cầu | Cách đáp ứng | Bằng chứng |
 |---|---|---|---|
 | 1 | Thiết kế giao thức | Gói UDP ≤ 1200 byte, 4 loại frame, stream ghép kênh | `docs/protocol.md`, mục 3 |
-| 2 | Handshake TCP | `HELLO → KEYX → AUTH → AUTH_OK/FAIL`, khung `[len][JSON]` | `internal/server/auth.go`, mục 4.1 |
+| 2 | Handshake TCP | `HELLO → KEYX → AUTH → AUTH_OK/FAIL`, khung `[len][JSON]` | `internal/server/auth.go` |
 | 3 | Auth + quản lý trạng thái | `users.json` (salt + SHA-256), registry theo user và conn_id, chặn đăng nhập trùng | `TestAuthFail` |
 | 4 | Concurrency | goroutine mỗi kết nối TCP / mỗi session / mỗi Conn transport | `TestManyClientsNoLeak`, `scripts/load_test.sh` |
 | 5 | Streaming nhạy thời gian | Mỗi tin = 1 stream ưu tiên cao; không HoL | mục 6.3, `TestChatLatencyDuringFile` |
@@ -34,47 +34,7 @@ trên socket TCP.
 
 ## 2. Kiến trúc hệ thống
 
-```mermaid
-flowchart LR
-  subgraph Client["Client (mỗi người dùng 1 tiến trình)"]
-    UI["Trình duyệt<br/>HTML/CSS/JS thuần"] -- "HTTP tự viết<br/>127.0.0.1:8081" --> WEB["webui"]
-    CLI["CLI (stdin)"] --> CORE
-    WEB --> CORE["client core<br/>EventLog, SeqBuffer,<br/>gửi/nhận file, reconnect"]
-    CORE --> TC["transport.Conn"]
-  end
-  subgraph Server
-    HS["Handshake TCP :9000<br/>ECDH + AUTH"] --> REG["Registry<br/>user ↔ conn_id ↔ Session"]
-    MUX["transport.Mux<br/>UDP :9001"] --> SS["Session<br/>serveSession + writeLoop"]
-    SS --> RT["Router<br/>chat / DM / file relay"]
-    RT --> REG
-  end
-  CORE -. "TCP: HELLO/KEYX/AUTH" .-> HS
-  TC <== "UDP: gói mã hóa AES-GCM" ==> MUX
-```
-
-Ba tầng:
-
-1. **Tầng mạng** (`internal/transport`, `internal/protocol`): biến UDP thành kênh tin cậy, mã hóa, ghép nhiều
-   stream độc lập trên 1 kết nối, tự điều tốc (CUBIC). Server dùng **1 socket UDP** cho mọi client; `Mux` đọc
-   `conn_id` trong header để chuyển gói tới đúng `Conn`.
-2. **Tầng xử lý** (`internal/server`, `internal/client`): xác thực, quản lý phiên, định tuyến chat/DM, chuyển tiếp
-   file dạng luồng (không lưu cả file trong RAM), sắp xếp tin theo `Seq`, kết nối lại.
-3. **Tầng giao diện** (`internal/webui`, CLI): HTTP server tự viết phục vụ trang tĩnh và API JSON; trình duyệt
-   hỏi `/api/events?since=N` định kỳ để lấy sự kiện mới.
-
-**Mô hình concurrency.**
-
-| Goroutine | Số lượng | Việc |
-|---|---|---|
-| `handleHandshake` | 1 / kết nối TCP | handshake, có deadline 10 s chống treo |
-| `Mux.readLoop` | 1 / server | đọc socket UDP, chuyển gói theo `conn_id` |
-| `Conn.run` | 1 / kết nối | **sở hữu toàn bộ state transport** (unacked, hàng đợi, cwnd); giao tiếp qua channel nên không cần mutex |
-| `serveSession` | 1 / user | đọc stream đến, định tuyến tin, mở relay file |
-| `writeLoop` | 1 / user | gửi tin ra theo thứ tự, đánh `Seq` |
-| `relayFile` | 1 / file đang chuyển | đọc từ channel, ghi tới các người nhận |
-
-Một client chậm không làm chậm người khác: `Session.Send` không chặn (hàng đợi 4096 tin); đầy thì server ngắt
-client đó thay vì bỏ tin âm thầm.
+*(B viết.)*
 
 ---
 
@@ -137,82 +97,13 @@ mà tầng transport vẫn không có HoL giữa các tin (xem mục 9, thử th
 
 ### 3.6 State diagram của client
 
-```mermaid
-stateDiagram-v2
-  [*] --> Handshake: ConnectWith()
-  Handshake --> Disconnected: AUTH_FAIL / lỗi mạng
-  Handshake --> Connected: AUTH_OK + Dial UDP
-  Connected --> Reconnecting: Done() (CLOSE từ server / im lặng 10 s)
-  Reconnecting --> Connected: handshake lại thành công
-  Reconnecting --> Reconnecting: thất bại, chờ 1 s, 2 s, 4 s ... ≤ 30 s
-  Connected --> Disconnected: Close() / Ctrl+C (gửi CLOSE)
-  Reconnecting --> Disconnected: Close()
-  Disconnected --> [*]
-```
+*(B vẽ.)*
 
 ---
 
 ## 4. Sequence diagram
 
-### 4.1 Đăng nhập
-
-```mermaid
-sequenceDiagram
-  participant C as Client
-  participant S as Server
-  C->>S: TCP HELLO {client_pub}
-  Note over S: sinh cặp khóa, conn_id = 1001
-  S->>C: KEYX {server_pub, conn_id, udp_port}
-  Note over C,S: cả 2 tính k_tcp, k_udp từ X25519
-  C->>S: AUTH {nonce, AES-GCM_k_tcp(user, pass)}
-  Note over S: kiểm tra sha256(salt+pass), chặn đăng nhập trùng,<br/>Mux.Accept(conn_id, k_udp)
-  S->>C: AUTH_OK {users}
-  C->>S: UDP PING (pn=0) — gửi lại sau 200/400/800 ms nếu chưa có trả lời
-  Note over S: biết địa chỉ UDP của client
-  S-->>C: ACK [0..0]
-  S->>C: STREAM(users: [...])
-```
-
-### 4.2 Một tin DM bị mất gói và được gửi lại
-
-```mermaid
-sequenceDiagram
-  participant A as Alice
-  participant S as Server
-  participant B as Bob
-  A->>S: pkt#41 STREAM(id=7, {"dm→bob","hi",seq=5}, FIN)
-  Note over A,S: pkt#41 bị mất
-  A->>S: pkt#42 STREAM(id=9, {"dm→bob","2",seq=6}, FIN)
-  S-->>A: ACK [42..42]
-  Note over S: tin seq=6 tới trước, SeqBuffer giữ lại
-  Note over A: pkt#41 bị vượt mặt và quá 9/8·RTT ⇒ mất
-  A->>S: pkt#43 STREAM(id=7, ...) (cùng frame, packet_num mới)
-  S-->>A: ACK [42..43]
-  Note over S: giao seq=5 rồi seq=6 theo đúng thứ tự
-  S->>B: STREAM(id=12, {"dm","hi",from=alice,seq=…})
-  S->>B: STREAM(id=14, {"dm","2",from=alice,seq=…})
-  B-->>S: ACK
-```
-
-### 4.3 Gửi file qua server
-
-```mermaid
-sequenceDiagram
-  participant A as Alice
-  participant S as Server
-  participant B as Bob
-  Note over A: lượt 1: tính SHA-256
-  A->>S: stream bulk: [0x02][FileMeta{name,size,sha256,to=bob}]
-  Note over S: đọc đủ header ⇒ mở stream mới tới Bob,<br/>goroutine relayFile
-  S->>B: [0x02][FileMeta{from=alice}]
-  loop từng đoạn ≤ 1000 byte
-    A->>S: STREAM(offset, data)
-    S->>B: STREAM(offset, data)
-  end
-  A->>S: FIN
-  S->>B: FIN
-  Note over B: so SHA-256 + kích thước ⇒ file_done / xóa file hỏng
-```
+*(B vẽ: đăng nhập; 1 tin DM bị mất gói và được gửi lại; gửi file qua server.)*
 
 ---
 

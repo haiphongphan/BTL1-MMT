@@ -1,4 +1,3 @@
-// Package client là logic phía client: đăng nhập, kết nối lại, gửi/nhận chat và file, EventLog cho UI.
 package client
 
 import (
@@ -27,15 +26,7 @@ type Client struct {
 	state   string
 	addr    string // lưu lại để reconnect
 	pass    string
-	net     NetOptions
-	outSeq  uint64 // Seq của tin gửi gần nhất trên kết nối hiện tại
-}
-
-// NetOptions giả lập mạng xấu ở chiều GỬI của client (xem transport.LossyConn).
-type NetOptions struct {
-	Loss   float64       // tỉ lệ mất gói, 0.1 = 10%
-	Delay  time.Duration // độ trễ cố định thêm vào mỗi gói
-	Jitter time.Duration // độ trễ ngẫu nhiên thêm [0, Jitter), không đảo thứ tự gói
+	loss    float64
 }
 
 type Status struct {
@@ -50,7 +41,6 @@ type Status struct {
 	LossPct  float64  `json:"loss_pct"`
 }
 
-// NewClient tạo client chưa kết nối; file nhận được lưu vào thư mục "downloads".
 func NewClient(username string) *Client {
 	return &Client{
 		User:        username,
@@ -59,7 +49,6 @@ func NewClient(username string) *Client {
 	}
 }
 
-// OnlineUsers trả về bản sao danh sách user đang online (theo tin "users" mới nhất từ server).
 func (c *Client) OnlineUsers() []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -85,7 +74,6 @@ func (c *Client) setState(st string) {
 	c.Events.Add("status", st)
 }
 
-// Status trả về trạng thái kết nối và số liệu mạng (RTT, cwnd, tỉ lệ mất gói) cho Web UI.
 func (c *Client) Status() Status {
 	c.mu.Lock()
 	st := Status{User: c.User, State: c.state, Online: append([]string(nil), c.online...)}
@@ -111,22 +99,16 @@ func (c *Client) isClosing() bool {
 	return c.closing
 }
 
-// Connect đăng nhập (TCP) rồi mở kết nối UDP; loss > 0 để giả lập mất gói.
 func (c *Client) Connect(serverTCPAddr, password string, loss float64) error {
-	return c.ConnectWith(serverTCPAddr, password, NetOptions{Loss: loss})
-}
-
-// ConnectWith giống Connect nhưng nhận đủ tham số giả lập mạng.
-func (c *Client) ConnectWith(serverTCPAddr, password string, opt NetOptions) error {
 	c.mu.Lock()
-	c.addr, c.pass, c.net = serverTCPAddr, password, opt
+	c.addr, c.pass, c.loss = serverTCPAddr, password, loss
 	c.mu.Unlock()
 	return c.dial()
 }
 
 func (c *Client) dial() error {
 	c.mu.Lock()
-	addr, pass, opt := c.addr, c.pass, c.net
+	addr, pass, loss := c.addr, c.pass, c.loss
 	c.mu.Unlock()
 
 	keyx, kUDP, err := c.ConnectTCPAndAuth(addr, pass)
@@ -148,24 +130,19 @@ func (c *Client) dial() error {
 		return err
 	}
 	var pc transport.PacketConn = sock
-	if opt.Loss > 0 || opt.Delay > 0 || opt.Jitter > 0 {
-		pc = &transport.LossyConn{UDPConn: sock, Loss: opt.Loss, Delay: opt.Delay, Jitter: opt.Jitter}
+	if loss > 0 {
+		pc = &transport.LossyConn{UDPConn: sock, Loss: loss}
 	}
 	conn, err := transport.Dial(pc, srvUDP, keyx.ConnID, kUDP) // Dial tự gửi PING đầu tiên
 	if err != nil {
 		sock.Close()
 		return err
 	}
-	if c.isClosing() { // Close() được gọi trong lúc đang kết nối (vd Ctrl+C khi đang reconnect)
-		conn.Close()
-		return errors.New("client: đã đóng")
-	}
 	c.AttachEndpoint(conn)
 	c.setState("connected")
 	return nil
 }
 
-// Close đóng kết nối (gửi CLOSE cho server) và dừng việc tự kết nối lại.
 func (c *Client) Close() {
 	c.mu.Lock()
 	c.closing = true
@@ -176,8 +153,6 @@ func (c *Client) Close() {
 	}
 }
 
-// ConnectTCPAndAuth chạy handshake TCP: HELLO → KEYX → AUTH (mật khẩu mã hóa bằng k_tcp) → AUTH_OK.
-// Trả về KEYX (conn_id, cổng UDP) và khóa k_udp cho transport.
 func (c *Client) ConnectTCPAndAuth(serverTCPAddr, password string) (*protocol.KeyX, [32]byte, error) {
 	conn, err := net.DialTimeout("tcp", serverTCPAddr, 5*time.Second)
 	if err != nil {
@@ -224,11 +199,9 @@ func (c *Client) ConnectTCPAndAuth(serverTCPAddr, password string) (*protocol.Ke
 	return &keyx, kUDP, nil
 }
 
-// AttachEndpoint gắn kết nối transport mới (kể cả khi kết nối lại) và chạy goroutine nhận dữ liệu.
 func (c *Client) AttachEndpoint(ep transport.Endpoint) {
 	c.mu.Lock()
 	c.ep = ep
-	c.outSeq = 0 // kết nối mới ⇒ Seq bắt đầu lại từ 1 (server cũng tạo SeqBuffer mới)
 	c.mu.Unlock()
 	go c.listenLoop(ep)
 }
@@ -241,7 +214,6 @@ type inStream struct {
 
 func (c *Client) listenLoop(ep transport.Endpoint) {
 	streams := make(map[uint32]*inStream)
-	var order protocol.SeqBuffer // tin từ server giao theo đúng Seq
 	defer func() {
 		for _, st := range streams { // file nhận dở → xóa file chưa hoàn chỉnh
 			if st.file != nil {
@@ -272,7 +244,7 @@ func (c *Client) listenLoop(ep transport.Endpoint) {
 			case protocol.KindMessage:
 				st.buf = append(st.buf, d.Data...)
 				if d.Fin {
-					c.handleMessage(st.buf, &order)
+					c.handleMessage(st.buf)
 				}
 			case protocol.KindFile:
 				c.onFileData(st.file, d)
@@ -293,18 +265,17 @@ func (c *Client) listenLoop(ep transport.Endpoint) {
 	}
 }
 
-func (c *Client) handleMessage(data []byte, order *protocol.SeqBuffer) {
+func (c *Client) handleMessage(data []byte) {
 	var msg protocol.AppMsg
 	if err := json.Unmarshal(data[1:], &msg); err != nil {
 		return
 	}
-	for _, m := range order.Push(msg) {
-		if m.Type == "users" {
-			c.setOnline(m.Users)
-		}
-		c.Events.Add(m.Type, m)
+	if msg.Type == "users" {
+		c.setOnline(msg.Users)
 	}
+	c.Events.Add(msg.Type, msg)
 }
+
 
 func (c *Client) reconnectLoop() {
 	delay := time.Second
@@ -319,14 +290,11 @@ func (c *Client) reconnectLoop() {
 	}
 }
 
+
 var ErrNotConnected = errors.New("client: chưa có kết nối UDP")
 
 func (c *Client) send(m protocol.AppMsg) error {
-	c.mu.Lock() // lấy ep và Seq cùng lúc: Seq phải thuộc đúng kết nối sẽ gửi nó
-	ep := c.ep
-	c.outSeq++
-	m.Seq = c.outSeq
-	c.mu.Unlock()
+	ep := c.endpoint()
 	if ep == nil {
 		return ErrNotConnected
 	}
@@ -337,12 +305,10 @@ func (c *Client) send(m protocol.AppMsg) error {
 	return ep.SendMessage(append([]byte{protocol.KindMessage}, b...))
 }
 
-// SendChat gửi tin chat chung cho mọi người đang online.
 func (c *Client) SendChat(text string) error {
 	return c.send(protocol.AppMsg{Type: "chat", Text: text})
 }
 
-// SendDM gửi tin nhắn riêng cho user to; server báo lỗi nếu người nhận không online.
 func (c *Client) SendDM(to, text string) error {
 	return c.send(protocol.AppMsg{Type: "dm", To: to, Text: text})
 }
