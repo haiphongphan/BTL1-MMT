@@ -1,0 +1,7 @@
+\section{Kiến trúc hệ thống}
+\label{sec:kien-truc}
+
+\phanB{Sơ đồ tổng thể client--server: các cổng 9000/TCP, 9001/UDP, 9002/UDP broadcast, Web UI trên
+\texttt{127.0.0.1:8080+}; các goroutine của server (accept TCP, \texttt{readLoop} UDP, mỗi session) và của
+client; luồng dữ liệu từ trình duyệt $\to$ client $\to$ server $\to$ client khác. Kiến trúc bên trong tầng
+transport đã có ở \cref{subsec:concurrency}, chỉ cần tham chiếu tới.}

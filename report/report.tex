@@ -1,0 +1,135 @@
+% Biên dịch: pdflatex -shell-escape report.tex (minted cần -shell-escape), chạy 2 lần để có mục lục.
+% Overleaf: Menu -> Compiler: pdfLaTeX (Overleaf tự bật shell-escape).
+\documentclass[final]{hcmut-report}
+\usepackage{codespace}
+
+% Encodings
+\usepackage{gensymb,textcomp}
+
+% Better tables
+\usepackage{array,longtable,multicol,multirow,siunitx,tabularx}
+
+% Better enum
+\usepackage{enumitem}
+% Kiểu danh sách giống Khoi.zip: gạch ngang, dấu cộng, dấu sao; khoảng cách gọn
+\setlist[itemize,1]{leftmargin=1.5em,itemsep=2pt,topsep=4pt,parsep=0pt,label={--}}
+\setlist[itemize,2]{leftmargin=1.4em,itemsep=1pt,topsep=2pt,parsep=0pt,label={+}}
+\setlist[itemize,3]{leftmargin=1.3em,itemsep=1pt,topsep=1pt,parsep=0pt,label={*}}
+
+% Tiêu đề \paragraph dạng khối in đậm (như Khoi.zip)
+\usepackage{titlesec}
+\setcounter{secnumdepth}{3} % \paragraph không đánh số (tài liệu không dùng \subsubsection)
+\titleformat{\paragraph}[block]{\normalfont\normalsize\bfseries}{\theparagraph}{1em}{}
+\titlespacing*{\paragraph}{0pt}{1.5ex}{1ex}
+\usepackage{needspace}
+
+% Graphics
+\usepackage{caption,float}
+\usepackage[export]{adjustbox}
+
+% Đồ thị cwnd vẽ trực tiếp từ dữ liệu đo (data/*.dat)
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.17}
+% Cache hình TikZ/pgfplots vào tikz-cache/ (cần -shell-escape); \cachedtikz{tên}{tikzpicture} đặt tên file cache
+\usetikzlibrary{external}
+\tikzexternalize[prefix=tikz-cache/]
+\newcommand{\cachedtikz}[2]{\tikzsetnextfilename{#1}#2}
+\usetikzlibrary{arrows.meta,positioning,shapes.multipart,fit,calc,decorations.pathreplacing}
+
+% References
+\usepackage[nameinlink]{cleveref}
+\crefname{section}{mục}{mục}\Crefname{section}{Mục}{Mục}
+\crefname{subsection}{mục}{mục}\Crefname{subsection}{Mục}{Mục}
+\crefname{figure}{hình}{hình}\Crefname{figure}{Hình}{Hình}
+\crefname{table}{bảng}{bảng}\Crefname{table}{Bảng}{Bảng}
+\crefname{lstlisting}{đoạn mã}{đoạn mã}\Crefname{lstlisting}{Đoạn mã}{Đoạn mã}
+\crefname{appendix}{phụ lục}{phụ lục}\Crefname{appendix}{Phụ lục}{Phụ lục}
+
+% Configurations
+\coursename{Mạng máy tính (CO3093)}
+\reporttype{Báo cáo Bài tập lớn 1}
+\title{Ứng dụng cộng tác client--server dựa trên streaming, chạy trên giao thức tin cậy tự thiết kế trên UDP}
+\advisor{& ThS. Bùi Xuân Giang &}
+\stuname{%
+  & Phan Hải Phong &  \\
+  & Trần Duy Phước Nghĩa &  \\
+}
+\reportplace{TP. Hồ Chí Minh}
+\reporttime{Tháng 11/2026}
+
+\AtBeginDocument{\counterwithin{lstlisting}{section}}
+\AtBeginDocument{\renewcommand*{\lstlistlistingname}{Danh sách đoạn mã}}
+\AtBeginDocument{\renewcommand*{\lstlistingname}{Đoạn mã}}
+
+% Định nghĩa ngôn ngữ Go cho listings (listings không có sẵn Go)
+\lstdefinelanguage{Go}{
+  morekeywords={break,case,chan,const,continue,default,defer,else,fallthrough,for,func,go,goto,if,
+    import,interface,map,package,range,return,select,struct,switch,type,var,nil,true,false},
+  morekeywords=[2]{bool,byte,error,float64,int,int64,string,uint16,uint32,uint64,append,len,make,max,min,delete},
+  sensitive=true,
+  morecomment=[l]{//},
+  morecomment=[s]{/*}{*/},
+  morestring=[b]",
+  morestring=[b]`,
+}
+\lstset{language=Go,basicstyle=\color{codebasic}\ttfamily\footnotesize}
+
+% Hộp đánh dấu phần chưa viết của thành viên B (xóa khi đã điền nội dung)
+\newcommand{\phanB}[1]{%
+  \begin{center}
+    \fcolorbox{red!70!black}{red!5}{\parbox{0.92\linewidth}{\textbf{[Phần của B]} #1}}
+  \end{center}}
+
+% Đường dẫn file / tên hàm trong code
+\newcommand{\fname}[1]{\texttt{#1}}
+
+% Cột bảng canh trái, tự xuống dòng (tránh khoảng trắng giãn ở cột hẹp)
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+
+% Cho phép giãn dòng thêm một chút để tên hàm dài (\texttt) không tràn lề
+\setlength{\emergencystretch}{2em}
+\AtBeginDocument{\renewcommand*{\refname}{Tài liệu tham khảo}}
+
+\begin{document}
+\coverpage%
+
+\section*{Danh sách thành viên \& phân công}
+\begin{center}
+  \begin{tabularx}{\linewidth}{clcY}
+    \toprule
+    \textbf{STT} & \textbf{Họ và tên} & \textbf{MSSV} & \textbf{Phụ trách} \\
+    \midrule
+    1 & Trần Duy Phước Nghĩa & 2412275 & \fname{internal/protocol} (gói, frame, tầng app), \fname{internal/transport}
+    (truyền tin cậy, mã hóa, CUBIC, không HoL), tài liệu giao thức, test transport \\
+    2 & Phan Hải Phong & 2412650 & \fname{internal/server} (handshake, đăng nhập, định tuyến, chuyển tiếp file),
+    \fname{internal/client}, \fname{internal/webui}, test hệ thống \\
+    \bottomrule
+  \end{tabularx}
+\end{center}
+\clearpage
+
+\tableofcontents
+\listoffigures
+\listoftables
+\lstlistoflistings{}
+
+\clearpage
+\input{chapters/01-tong-quan.tex}
+\input{chapters/02-kien-truc.tex}
+\input{chapters/03-giao-thuc.tex}
+\input{chapters/04-sequence.tex}
+\input{chapters/05-tin-cay.tex}
+\input{chapters/06-cc-hol.tex}
+\input{chapters/07-bao-mat.tex}
+\input{chapters/08-kiem-thu.tex}
+\input{chapters/09-thu-thach.tex}
+\input{chapters/10-ket-luan.tex}
+
+\appendix
+\input{chapters/a-tham-so.tex}
+
+\bibliographystyle{plain}
+\bibliography{refs/refs.bib}
+
+\end{document}

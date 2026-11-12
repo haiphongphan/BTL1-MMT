@@ -1,0 +1,31 @@
+\section{Tham số mặc định của tầng transport}
+\label{app:tham-so}
+
+\begin{longtable}{L{0.25\linewidth} L{0.4\linewidth} L{0.27\linewidth}}
+  \caption{Tham số mặc định (\fname{internal/transport})}\label{tab:tham-so} \\
+  \toprule
+  \textbf{Tham số} & \textbf{Giá trị} & \textbf{Ghi chú} \\
+  \midrule
+  \endfirsthead
+  \toprule
+  \textbf{Tham số} & \textbf{Giá trị} & \textbf{Ghi chú} \\
+  \midrule
+  \endhead
+  Kích thước gói & $\le$ 1200 byte & Tránh phân mảnh IP \\
+  Dữ liệu mỗi STREAM frame & $\le$ 1000 byte & Chừa chỗ ghép ACK \\
+  Đồng hồ mỗi kết nối & 10 ms khi có gói chờ ACK, 100 ms khi rảnh & Thử thách~\ref{tt:cpu} \\
+  Keep-alive & PING sau 2 s không gửi gì & \\
+  PING đầu sau khi kết nối & gửi lại sau 200, 400, 800 ms\dots{} (tối đa 2 s) & Thử thách~\ref{tt:ping-dau} \\
+  Idle timeout & 10 s & \\
+  Mất theo số đếm & bị 3 gói vượt mặt & RFC 9002 \\
+  Mất theo thời gian & $\frac98 \max(\mathit{SRTT}, R_\text{mới nhất})$, tối thiểu 1 ms & RFC 9002 \\
+  RTO & ban đầu 500 ms; sau đó $\mathit{SRTT} + \max(4\,\mathit{RTTVAR}, 1\,\text{ms}) + 10$ ms
+  & Công thức PTO của QUIC \\
+  RTO backoff & $\times 2$ mỗi lần hết giờ liên tiếp, tối đa 5 s & Về bình thường khi có ACK mới \\
+  ACK & ngay trong lần flush kế tiếp, tối đa 8 khoảng & Gói chỉ có ACK thì không ACK lại \\
+  Cửa sổ nhận & 1 MB & \\
+  Hàng đợi file (bulk) & 256 frame & Đầy thì \fname{Write} bị chặn \\
+  Congestion control & CUBIC (mặc định) hoặc cố định 64 KB (\texttt{-cc fixed}) & \\
+  CUBIC & $C = 0{,}4$, $\beta = 0{,}7$, cwnd ban đầu 10 gói, sàn 2 gói, trần 1 MB & RFC 9438 \\
+  \bottomrule
+\end{longtable}

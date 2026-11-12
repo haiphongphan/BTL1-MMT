@@ -1,0 +1,86 @@
+\section{Tổng quan}
+\label{sec:tong-quan}
+
+\subsection{Bài toán}
+Đề bài yêu cầu xây dựng một ứng dụng cộng tác theo mô hình client--server cho mạng nội bộ: người dùng đăng
+nhập, thấy danh sách người đang online, chat chung (broadcast), nhắn riêng (unicast) và gửi file. Điểm cốt lõi
+là toàn bộ dữ liệu phải đi qua \textbf{một giao thức tầng ứng dụng tự thiết kế trên UDP}, có đủ các tính chất
+mà UDP không có: truyền tin cậy, đúng thứ tự, điều khiển luồng và điều khiển tắc nghẽn (CUBIC hoặc BBR), mã hóa,
+và không bị \emph{Head-of-Line blocking} (HoL) giữa tin nhắn và file. Đề bài gợi ý tham khảo QUIC
+\cite{rfc9000} và Valve GameNetworkingSockets \cite{valve-gns} cho tầng transport hướng message.
+
+Ràng buộc kỹ thuật: chỉ dùng socket thô (không framework HTTP, không WebSocket), giao diện là trang web dùng
+JavaScript thuần phía client, server chịu được 10--20 client đồng thời.
+
+\subsection{Lựa chọn công nghệ}
+Hệ thống viết bằng \textbf{Go} và \textbf{chỉ dùng thư viện chuẩn}:
+\begin{itemize}
+  \item \fname{net}: socket TCP/UDP thô (\fname{net.ListenUDP}, \fname{WriteToUDP}, \fname{ReadFromUDP}).
+  \item \fname{crypto/ecdh}, \fname{crypto/aes}, \fname{crypto/cipher}, \fname{crypto/sha256}: trao đổi
+        khóa X25519 và mã hóa AES-256-GCM.
+  \item \fname{encoding/binary}, \fname{encoding/json}: đóng gói header/frame nhị phân và nội dung tầng app.
+\end{itemize}
+Go phù hợp với bài toán vì goroutine rất rẻ (vài KB stack): mỗi kết nối có goroutine riêng mà server 20 client
+vẫn chỉ có vài chục goroutine; \fname{select} trên channel cho phép viết vòng lặp sự kiện của mỗi kết nối mà
+không cần khóa.
+
+\subsection{Phân tầng}
+Hệ thống chia thành các tầng tách biệt, đúng yêu cầu ``tách logic mạng, xử lý dữ liệu và giao diện'' của đề:
+
+\begin{table}[H]
+  \centering
+  \caption{Các tầng của hệ thống}
+  \label{tab:tang}
+  \begin{tabularx}{\linewidth}{lL{0.3\linewidth}Y}
+    \toprule
+    \textbf{Tầng} & \textbf{Package} & \textbf{Nhiệm vụ} \\
+    \midrule
+    Giao diện & \fname{internal/webui} & HTTP/1.1 tự viết trên socket TCP, trang HTML + JS thuần \\
+    Ứng dụng & \fname{internal/server}, \fname{internal/client} & Đăng nhập, danh sách user, định tuyến
+    chat/DM, chuyển tiếp file \\
+    Định dạng & \fname{internal/protocol} & Header gói, frame, nội dung stream (\fname{AppMsg},
+    \fname{FileMeta}), \fname{SeqBuffer} \\
+    Transport & \fname{internal/transport} & Biến UDP thành kênh tin cậy, mã hóa, nhiều stream độc lập,
+    tự điều tốc \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+Tầng ứng dụng chỉ thấy interface \fname{transport.Endpoint} (\cref{sec:api}): gửi một message, mở một stream
+dài, nhận các đoạn byte đã đúng thứ tự. Mọi chi tiết UDP (gói, ACK, gửi lại, mã hóa) nằm gọn trong tầng
+transport.
+
+\subsection{Đối chiếu với 10 bước của đề}
+\label{subsec:rubric}
+
+\begin{longtable}{c L{0.2\linewidth} L{0.42\linewidth} L{0.2\linewidth}}
+  \caption{Đối chiếu 10 bước của đề với thiết kế}\label{tab:rubric} \\
+  \toprule
+  \textbf{Bước} & \textbf{Yêu cầu} & \textbf{Cách đáp ứng} & \textbf{Ở đâu} \\
+  \midrule
+  \endfirsthead
+  \toprule
+  \textbf{Bước} & \textbf{Yêu cầu} & \textbf{Cách đáp ứng} & \textbf{Ở đâu} \\
+  \midrule
+  \endhead
+  1 & Thiết kế giao thức & Gói UDP $\le$ 1200 byte, 4 loại frame, nhiều stream ghép kênh trong 1 kết nối,
+  nội dung stream MESSAGE/FILE & \cref{sec:giao-thuc} \\
+  2 & Handshake TCP & \texttt{HELLO} $\to$ \texttt{KEYX} $\to$ \texttt{AUTH} $\to$
+  \texttt{AUTH\_OK}/\texttt{AUTH\_FAIL} & \cref{subsec:handshake}; B \\
+  3 & Đăng nhập, quản lý trạng thái & (B) & B \\
+  4 & Concurrency & Transport: 1 goroutine sở hữu state của mỗi kết nối, giao tiếp qua channel; server: (B)
+  & \cref{subsec:concurrency}; B \\
+  5 & Streaming nhạy thời gian & Mỗi tin = 1 stream ưu tiên cao; không HoL ở cả phía gửi và phía nhận
+  & \cref{sec:hol} \\
+  6 & Truyền file tin cậy qua UDP & SACK, phát hiện mất 3 cách, gửi lại chỉ frame bị mất, ghép theo offset,
+  SHA-256 đầu cuối & \cref{sec:tin-cay} \\
+  7 & Resilience & Keep-alive 2 s, idle timeout 10 s, \texttt{CLOSE}, bỏ im lặng gói hỏng/giả mạo,
+  RTO backoff; phía server: (B) & \cref{subsec:song-chet}; B \\
+  8 & Bảo mật & ECDH X25519 + AES-256-GCM, header là AAD, nonce không bao giờ lặp & \cref{sec:bao-mat} \\
+  9 & Giao diện HTTP + JS thuần & (B) & B \\
+  10 & Test, chất lượng code & \fname{go vet}, \fname{go test -race}; test đơn vị protocol/transport;
+  phép đo trên mạng giả lập & \cref{sec:kiem-thu} \\
+  \bottomrule
+\end{longtable}
+
+\phanB{Điền cột ``Cách đáp ứng'' cho bước 3, 4 (phía server), 7 (phía server) và 9.}
