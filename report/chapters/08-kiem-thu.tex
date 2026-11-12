@@ -6,7 +6,7 @@
   \small
   \begin{tabularx}{\linewidth}{lY}
     \texttt{go vet ./...} & sạch \\
-    \texttt{go test -race ./...} & sạch (protocol, transport, server) \\
+    \texttt{go test -race ./...} & sạch (protocol, transport, server, client) \\
     \texttt{BTL\_LONG=1 go test -run Long -v ./internal/transport/} & các phép đo ở \cref{tab:do-transport}
   \end{tabularx}
 \end{center}
@@ -101,8 +101,56 @@ cho chiều dữ liệu vì ACK ở chiều ngược lại cũng bị mất. V�
 gói bị coi là mất oan (trước khi sửa bộ giả lập: 89\%, thử thách~\ref{tt:jitter}). Độ trễ tin chat khi đang
 truyền file: \cref{tab:hol}.
 
-\subsection{Test hệ thống}
-\phanB{Bảng 10 kịch bản chạy server và client thật: (1) 3 client chat chung + DM; (2) loss 10\%, 20\%, jitter;
-(3) file 1 KB / 10 MB / 200 MB, kiểm tra SHA-256; (4) gửi file lớn trong khi chat, độ trễ chat; (5) Ctrl+C /
-\texttt{kill -9} một client; (6) tắt server rồi bật lại; (7) sai mật khẩu / user lạ / đăng nhập trùng; (8) gói
-rác vào cổng UDP; (9) 20 client cùng lúc: số goroutine, CPU, bộ nhớ; (10) Wireshark.}
+\subsection{Test tích hợp và hệ thống của tầng ứng dụng}
+\label{subsec:test-he-thong}
+Phía server có 7 test tích hợp (\fname{internal/server/router\_test.go}) chạy server thật với transport giả
+(\fname{transport.FakePair}): broadcast 20 tin đúng thứ tự và \texttt{From} bị ghi đè; DM tới user offline trả
+\texttt{error}; file 300 KB đi qua server với header bị cắt làm hai mảnh; file tới user offline; client chết thì
+danh sách user được phát lại và registry sạch; đăng nhập trùng bị từ chối; tin tới với \texttt{Seq} 2, 3, 1 được
+giao 1, 2, 3 và server đánh lại \texttt{Seq} liên tiếp cho người nhận. Test hệ thống
+\fname{internal/client/e2e\_test.go} chạy server thật và hai client thật qua UDP localhost với loss 10\% mỗi
+chiều: chat tới đúng người, file 5 MB đúng SHA-256, DM gửi giữa lúc truyền file vẫn tới ngay, client đóng thì
+người kia thấy danh sách cập nhật. Tất cả chạy trong \texttt{go test -race ./...}.
+
+Bảng dưới là các kịch bản chạy bằng binary thật (server, client với Web UI, gọi qua \texttt{/api}) trên macOS
+(Apple Silicon), Go 1.27, loopback, mỗi bên \texttt{-loss 0.1} trừ khi ghi khác; đo ngày 13/11/2026.
+
+\begin{longtable}{c L{0.27\linewidth} L{0.6\linewidth}}
+  \caption{Test hệ thống với server và client thật}\label{tab:he-thong} \\
+  \toprule
+  \textbf{\#} & \textbf{Kịch bản} & \textbf{Kết quả} \\
+  \midrule
+  \endfirsthead
+  \toprule
+  \textbf{\#} & \textbf{Kịch bản} & \textbf{Kết quả} \\
+  \midrule
+  \endhead
+  1 & 3 client: chat chung, DM, DM tới user offline & 20 tin liên tiếp tới cả hai người kia đúng thứ tự; người
+  gửi không nhận lại tin mình; DM chỉ người nhận thấy, \texttt{From} do server đặt; DM tới user không online
+  nhận \texttt{error} ``User 'zed' hiện không online'' \\
+  2 & Loss 20\% mỗi chiều + jitter 30 ms, 50 chat liên tiếp & Nhận đủ 50/50, đúng thứ tự, không trùng, trong
+  1,0 s; transport báo 18,7\% gói phải gửi lại \\
+  3 & File 1 KB / 10 MB / 200 MB, loss 10\% & SHA-256 khớp cả ba; 1 KB: 0,06 s; 10 MB: 7,4 s (1,4 MB/s);
+  200 MB: 121 s (1,65 MB/s); bộ nhớ server không tăng theo kích thước file \\
+  4 & DM gửi trong lúc file 200 MB đang truyền & DM tới người nhận sau \textbf{57 ms}, không chờ file
+  (\cref{sec:hol}) \\
+  5 & Ctrl+C một client; \texttt{kill -9} một client khác & Ctrl+C: client gửi \texttt{CLOSE}, người còn lại thấy
+  danh sách cập nhật sau \textbf{0,05 s}; \texttt{kill -9}: không có \texttt{CLOSE}, phát hiện bằng idle timeout
+  sau 9,97 s; cả hai đăng nhập lại được ngay \\
+  6 & Ctrl+C server rồi bật lại & Server gửi \texttt{CLOSE} cho mọi client, client sang \textsc{Reconnecting} sau
+  0,05 s; server bật lại thì client \textsc{Connected} sau 1,0 s (lần thử đầu của backoff) \\
+  7 & Sai mật khẩu / user lạ / đăng nhập trùng & \texttt{AUTH\_FAIL} cả ba: hai trường hợp đầu cùng lý do ``tài
+  khoản hoặc mật khẩu không chính xác'', trùng thì ``tài khoản đang online ở máy khác'' \\
+  8 & Gói rác: 200 gói UDP ngẫu nhiên 1--1400 byte vào 9001; TCP gửi độ dài sai và JSON hỏng vào 9000 & Server
+  không crash, không log lỗi; client đang nối vẫn \texttt{connected}; handshake treo bị cắt sau 10 s \\
+  9 & 20 client bot, loss 10\%, 60 s & \textbf{86 goroutine} (4 cho mỗi client + nền) không đổi suốt thời gian
+  chạy, heap 1,1--2,8 MB (GC dao động); mỗi client nhận $\approx$ 550 tin/phút, 0 lỗi, hàng đợi gửi không bao
+  giờ đầy; tắt 20 client thì server xóa đủ session \\
+  10 & Wireshark trên 9000/TCP và 9001/UDP & Chỉ thấy base64 của \texttt{sealed} trong \texttt{AUTH}; payload
+  UDP không đọc được (\cref{sec:bao-mat}) \\
+  \bottomrule
+\end{longtable}
+
+Kịch bản 1--8 được tự động hóa bằng một script gọi \texttt{/api/send}, \texttt{/api/upload},
+\texttt{/api/events} của Web UI, nên lặp lại được sau mỗi lần sửa code; kịch bản 9 dùng
+\fname{scripts/run\_clients.sh}.

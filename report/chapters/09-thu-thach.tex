@@ -40,5 +40,44 @@
 \end{enumerate}
 
 \subsection{Tầng ứng dụng}
-\phanB{Các thử thách phía server/client/web UI (ví dụ: hàng đợi gửi của server khi một người nhận quá chậm,
-broadcast danh sách user bị xen kẽ khi nhiều người đăng nhập cùng lúc, tự kết nối lại khi server khởi động lại).}
+\begin{enumerate}[label=\textbf{\arabic*.}, leftmargin=*, itemsep=2pt]
+  \item \textbf{Tin tới sai thứ tự vì \texttt{go Send()}.} Bản đầu server gửi mỗi tin trong một goroutine mới
+        để không chặn vòng lặp đọc; Go không đảm bảo thứ tự chạy của các goroutine nên người nhận thấy tin ``2''
+        trước tin ``1'' ngay cả khi không mất gói. \emph{Giải pháp:} mỗi session một hàng đợi \texttt{sendCh} và
+        đúng một goroutine \fname{writeLoop} gọi \texttt{SendMessage}; test gửi 20 tin liên tiếp kiểm tra thứ tự.
+  \item \textbf{Một người nhận chậm làm kẹt cả server.} Nếu gửi trong lúc còn giữ khóa \fname{Registry}, hoặc
+        ghi vào hàng đợi theo kiểu chặn, một client treo (ví dụ trình duyệt đóng, cửa sổ nhận về 0) giữ luôn
+        goroutine của những người khác. \emph{Giải pháp:} \fname{Snapshot} danh sách rồi thả khóa mới gửi; ghi
+        vào \texttt{sendCh} bằng \texttt{select} có \texttt{default}, đầy thì bỏ tin và ghi log. Hệ quả là phải
+        cấp \texttt{Seq} trong \fname{writeLoop} chứ không phải lúc xếp hàng, để tin bị bỏ không tạo chỗ trống
+        làm \fname{SeqBuffer} phía client chờ mãi (\cref{subsec:app}).
+  \item \textbf{Đăng nhập trùng lọt qua khi hai client cùng tên đến cùng lúc.} ``Kiểm tra đã online chưa'' rồi
+        ``thêm vào registry'' là hai lần khóa riêng, giữa hai lần đó client kia chen vào được. \emph{Giải pháp:}
+        \fname{AddPending} kiểm tra và thêm trong cùng một lần giữ khóa, trả \texttt{ErrAlreadyOnline}.
+  \item \textbf{Xóa nhầm phiên mới của user vừa kết nối lại.} \fname{dropSession} xóa theo tên, nên khi một user
+        rớt mạng rồi đăng nhập lại ngay, kết nối cũ chết sau đó (idle timeout) xóa luôn phiên mới và người đó
+        thành ``ma'': không trong danh sách nhưng vẫn nhận được tin. \emph{Giải pháp:} \fname{Remove} so sánh con
+        trỏ session, chỉ xóa khi nó vẫn là phiên hiện tại của tên đó, và idempotent vì được gọi từ nhiều đường
+        (vòng đọc kết thúc, \texttt{Done()}, lỗi gửi).
+  \item \textbf{Session pending không bao giờ hết hạn.} Client đăng nhập xong mà không gửi gói UDP nào (mất
+        mạng đúng lúc đó) thì tên bị giữ ``online'' mãi, không ai đăng nhập lại được. Bản đầu định thêm một
+        timer riêng; \emph{giải pháp} gọn hơn là tạo \fname{transport.Conn} ngay sau \texttt{AUTH\_OK}: idle
+        timeout 10 s của chính transport đóng kết nối và dọn session, không cần cơ chế mới.
+  \item \textbf{Chuyển tiếp file mà không giữ cả file trong RAM.} Với 20 client gửi file 200 MB cho nhau, giữ
+        cả file ở server là không chấp nhận được. \emph{Giải pháp:} đọc meta ở đầu stream, mở ngay stream tới
+        người nhận và chuyển tiếp từng mảnh qua một kênh 256 phần tử trong goroutine riêng (pipeline); khi
+        người nhận chậm, kênh đầy, vòng đọc của người gửi bị chặn và cửa sổ nhận của transport làm người gửi
+        chậm theo. Hai mảnh đầu có thể cắt ngang JSON meta nên cần \fname{FileHeaderParser} gom theo byte.
+  \item \textbf{Tự kết nối lại và thoát sạch.} Khi \texttt{Done()} đóng mà không do người dùng thoát, client
+        handshake lại với backoff 1, 2, 4\dots{} 30 s. Trong 10 s đầu server có thể còn giữ phiên cũ nên trả
+        \texttt{AUTH\_FAIL} ``đang online''; backoff thử tiếp là vào được. Ban đầu Ctrl+C làm process chết mà
+        không gửi \texttt{CLOSE}, server và những người khác phải chờ 10 s mới thấy user rời đi; thêm bắt tín hiệu
+        ở cả client lẫn server (server đóng \fname{Mux} để gửi \texttt{CLOSE} cho mọi client) thì chỉ còn
+        0,1--0,2 s (\cref{tab:he-thong}).
+  \item \textbf{Web UI không có \fname{net/http}.} Phải tự đọc request line và header, xử lý
+        \texttt{Content-Length} cho cả JSON nhỏ lẫn file hàng trăm MB (thân đọc thẳng ra file tạm, không vào
+        RAM), và trả \texttt{Connection: close} để không phải cài keep-alive. Trình duyệt không được server dội
+        lại tin của chính mình nên JS tự hiển thị khi bấm gửi; nội dung chat là dữ liệu của người khác nên phải
+        escape HTML trước khi chèn vào DOM. Process client chạy nền (\texttt{< /dev/null}) hết stdin là thoát,
+        phải giữ process sống khi còn Web UI.
+\end{enumerate}

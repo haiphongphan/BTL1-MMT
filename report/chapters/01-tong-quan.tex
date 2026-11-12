@@ -66,21 +66,31 @@ transport.
   1 & Thiết kế giao thức & Gói UDP $\le$ 1200 byte, 4 loại frame, nhiều stream ghép kênh trong 1 kết nối,
   nội dung stream MESSAGE/FILE & \cref{sec:giao-thuc} \\
   2 & Handshake TCP & \texttt{HELLO} $\to$ \texttt{KEYX} $\to$ \texttt{AUTH} $\to$
-  \texttt{AUTH\_OK}/\texttt{AUTH\_FAIL} & \cref{subsec:handshake}; B \\
-  3 & Đăng nhập, quản lý trạng thái & (B) & B \\
-  4 & Concurrency & Transport: 1 goroutine sở hữu state của mỗi kết nối, giao tiếp qua channel; server: (B)
-  & \cref{subsec:concurrency}; B \\
+  \texttt{AUTH\_OK}/\texttt{AUTH\_FAIL}, mỗi message đóng khung \texttt{[len][JSON]}; server dành một goroutine
+  cho mỗi handshake, deadline 10 s & \cref{subsec:handshake}, \cref{fig:seq-login} \\
+  3 & Đăng nhập, quản lý trạng thái & \texttt{users.json} chỉ lưu \texttt{sha256(salt $\|$ pass)};
+  \fname{Registry} (RWMutex) tra session theo tên và theo \texttt{conn\_id}, từ chối đăng nhập trùng ngay trong
+  lúc giữ khóa; server ghi đè \texttt{From} nên không giả danh được; danh sách online phát lại cho mọi người khi có
+  người vào/ra & \cref{sec:kien-truc}, \cref{sec:bao-mat} \\
+  4 & Concurrency & Transport: 1 goroutine sở hữu state của mỗi kết nối, giao tiếp qua channel. Server: mỗi
+  session có goroutine đọc (\fname{serveSession}) và goroutine ghi (\fname{writeLoop}) với hàng đợi riêng, nên
+  một client chậm không chặn người khác; 20 client đồng thời chạy ổn định (\cref{tab:he-thong})
+  & \cref{subsec:concurrency}, \cref{sec:kien-truc} \\
   5 & Streaming nhạy thời gian & Mỗi tin = 1 stream ưu tiên cao; không HoL ở cả phía gửi và phía nhận
   & \cref{sec:hol} \\
   6 & Truyền file tin cậy qua UDP & SACK, phát hiện mất 3 cách, gửi lại chỉ frame bị mất, ghép theo offset,
   SHA-256 đầu cuối & \cref{sec:tin-cay} \\
   7 & Resilience & Keep-alive 2 s, idle timeout 10 s, \texttt{CLOSE}, bỏ im lặng gói hỏng/giả mạo,
-  RTO backoff; phía server: (B) & \cref{subsec:song-chet}; B \\
+  RTO backoff. Server: \texttt{recover()} trong goroutine của mỗi session, xóa session idempotent, gói rác
+  trên cả hai cổng bị bỏ qua. Client: tự kết nối lại với backoff 1--30 s, Ctrl+C gửi \texttt{CLOSE}
+  & \cref{subsec:song-chet}, \cref{subsec:state} \\
   8 & Bảo mật & ECDH X25519 + AES-256-GCM, header là AAD, nonce không bao giờ lặp & \cref{sec:bao-mat} \\
-  9 & Giao diện HTTP + JS thuần & (B) & B \\
-  10 & Test, chất lượng code & \fname{go vet}, \fname{go test -race}; test đơn vị protocol/transport;
-  phép đo trên mạng giả lập & \cref{sec:kiem-thu} \\
+  9 & Giao diện HTTP + JS thuần & HTTP/1.1 tự viết trên \fname{net.Listen} (đọc request line, header,
+  \texttt{Content-Length}); trang HTML + JavaScript thuần poll \texttt{/api/events?since=N}; upload file bằng
+  \texttt{POST} thân thô; file tĩnh nhúng vào binary bằng \texttt{embed} & \cref{sec:kien-truc} \\
+  10 & Test, chất lượng code & \fname{go vet}, \fname{go test -race}; test đơn vị protocol/transport; test
+  tích hợp server (\fname{FakePair}) và test hệ thống (server + 2 client thật qua UDP, loss 10\%); phép đo trên
+  mạng giả lập & \cref{sec:kiem-thu} \\
   \bottomrule
 \end{longtable}
 
-\phanB{Điền cột ``Cách đáp ứng'' cho bước 3, 4 (phía server), 7 (phía server) và 9.}
