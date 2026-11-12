@@ -8,11 +8,21 @@ import (
 	"os"
 	"strings"
 	"time"
+	"math/rand/v2"
 
 	"github.com/phongphanhai06/go-collab/internal/client"
 	"github.com/phongphanhai06/go-collab/internal/transport"
 	"github.com/phongphanhai06/go-collab/internal/webui"
 )
+
+func runBot(c *client.Client) {
+	for i := 1; ; i++ {
+		time.Sleep(time.Second + time.Duration(rand.IntN(2000))*time.Millisecond)
+		if err := c.SendChat(fmt.Sprintf("bot %s #%d", c.User, i)); err != nil {
+			log.Printf("bot: %v", err)
+		}
+	}
+}
 
 func main() {
 	serverAddr := flag.String("server", "127.0.0.1:9000", "Server TCP Address")
@@ -22,6 +32,9 @@ func main() {
 	ccName := flag.String("cc", "cubic", "Congestion control: cubic | fixed (cửa sổ cố định 64 KB)")
 	loss := flag.Float64("loss", 0, "Tỉ lệ mất gói giả lập khi gửi (0.1 = 10%)")
 	web := flag.String("web", "127.0.0.1:8081", "Địa chỉ Web UI local (rỗng = tắt)")
+	jitter := flag.Duration("jitter", 0, "Trễ ngẫu nhiên giả lập khi gửi (vd 30ms)")
+	bot := flag.Bool("bot", false, "Chế độ bot: tự gửi chat mỗi 1–3s (test tải)")
+
 	flag.Parse()
 
 	if err := transport.SetCongestionControl(*ccName); err != nil {
@@ -36,6 +49,8 @@ func main() {
 	}
 
 	c := client.NewClient(*username)
+	c.Jitter = *jitter
+
 	if err := c.Connect(*serverAddr, *password, *loss); err != nil {
 		log.Fatalf("Đăng nhập thất bại: %v", err)
 	}
@@ -48,6 +63,10 @@ func main() {
 			}
 		}()
 		fmt.Printf("🌐 Web UI: http://%s\n", *web)
+	}
+
+	if *bot {
+		go runBot(c)
 	}
 
 	// Loop in Event ra console
@@ -113,5 +132,11 @@ func main() {
 		select {}
 	}
 	c.Close()
+
+	if *web != "" || *bot {
+		fmt.Println("CLI đóng, Web UI/bot vẫn chạy. Ctrl+C để thoát.")
+		select {}
+	}
+
 
 }
