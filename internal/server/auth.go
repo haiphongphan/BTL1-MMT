@@ -167,6 +167,14 @@ func (s *Server) handleHandshake(c net.Conn) {
 	})
 }
 
+// Close đóng mọi kết nối UDP (gửi CLOSE để client biết ngay thay vì chờ idle timeout 10 s) rồi đóng socket.
+// Dùng khi server tắt chủ động (Ctrl+C).
+func (s *Server) Close() {
+	if s.mux != nil {
+		s.mux.Close()
+	}
+}
+
 func (s *Server) checkPassword(username, password string) bool {
 	acc, ok := s.users[username]
 	if !ok {

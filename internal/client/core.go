@@ -28,6 +28,7 @@ type Client struct {
 	addr    string // lưu lại để reconnect
 	pass    string
 	loss    float64
+	seq     uint64 // Seq của tin gửi đi trên kết nối hiện tại (1, 2, 3...); về 0 khi có kết nối mới
 }
 
 type Status struct {
@@ -203,6 +204,7 @@ func (c *Client) ConnectTCPAndAuth(serverTCPAddr, password string) (*protocol.Ke
 func (c *Client) AttachEndpoint(ep transport.Endpoint) {
 	c.mu.Lock()
 	c.ep = ep
+	c.seq = 0 // kết nối mới: đánh số lại từ 1, server cũng có SeqBuffer mới cho kết nối này
 	c.mu.Unlock()
 	go c.listenLoop(ep)
 }
@@ -215,6 +217,7 @@ type inStream struct {
 
 func (c *Client) listenLoop(ep transport.Endpoint) {
 	streams := make(map[uint32]*inStream)
+	var inSeq protocol.SeqBuffer // sắp lại tin server gửi theo Seq; mỗi kết nối một bộ đệm mới
 	defer func() {
 		for _, st := range streams { // file nhận dở → xóa file chưa hoàn chỉnh
 			if st.file != nil {
@@ -245,7 +248,7 @@ func (c *Client) listenLoop(ep transport.Endpoint) {
 			case protocol.KindMessage:
 				st.buf = append(st.buf, d.Data...)
 				if d.Fin {
-					c.handleMessage(st.buf)
+					c.handleMessage(&inSeq, st.buf)
 				}
 			case protocol.KindFile:
 				c.onFileData(st.file, d)
@@ -266,15 +269,19 @@ func (c *Client) listenLoop(ep transport.Endpoint) {
 	}
 }
 
-func (c *Client) handleMessage(data []byte) {
+// handleMessage giải mã 1 stream message rồi đưa qua SeqBuffer: mỗi tin là 1 stream riêng (không HoL),
+// nên khi mất gói tin #2 có thể tới trước tin #1; SeqBuffer giữ #2 lại cho tới khi #1 tới.
+func (c *Client) handleMessage(inSeq *protocol.SeqBuffer, data []byte) {
 	var msg protocol.AppMsg
 	if err := json.Unmarshal(data[1:], &msg); err != nil {
 		return
 	}
-	if msg.Type == "users" {
-		c.setOnline(msg.Users)
+	for _, m := range inSeq.Push(msg) {
+		if m.Type == "users" {
+			c.setOnline(m.Users)
+		}
+		c.Events.Add(m.Type, m)
 	}
-	c.Events.Add(msg.Type, msg)
 }
 
 func (c *Client) reconnectLoop() {
@@ -293,7 +300,14 @@ func (c *Client) reconnectLoop() {
 var ErrNotConnected = errors.New("client: chưa có kết nối UDP")
 
 func (c *Client) send(m protocol.AppMsg) error {
-	ep := c.endpoint()
+	// Lấy endpoint và cấp Seq trong cùng một lần giữ khóa, để Seq luôn thuộc đúng kết nối đang dùng.
+	c.mu.Lock()
+	ep := c.ep
+	if ep != nil {
+		c.seq++
+		m.Seq = c.seq
+	}
+	c.mu.Unlock()
 	if ep == nil {
 		return ErrNotConnected
 	}

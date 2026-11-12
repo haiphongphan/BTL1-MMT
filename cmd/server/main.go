@@ -5,7 +5,10 @@ import (
 	"flag"
 	"log"
 	"net"
+	"os"
+	"os/signal"
 	"runtime"
+	"syscall"
 	"time"
 
 	"github.com/phongphanhai06/go-collab/internal/server"
@@ -45,6 +48,17 @@ func main() {
 
 	go srv.StartDiscovery(context.Background(), localIP())
 	go logRunTime(10 * time.Second)
+
+	// Ctrl+C: gửi CLOSE cho mọi client rồi mới thoát, để client chuyển sang "reconnecting" ngay
+	// thay vì chờ idle timeout 10 s.
+	go func() {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+		<-sig
+		log.Printf("[Server] Đang tắt: đóng mọi kết nối...")
+		srv.Close()
+		os.Exit(0)
+	}()
 
 	if err := srv.ListenTCP(*tcpAddr); err != nil {
 		log.Fatalf("Server TCP ngưng hoạt động: %v", err)

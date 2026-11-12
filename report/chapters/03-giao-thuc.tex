@@ -179,11 +179,54 @@ sớm được giữ lại tới khi các tin trước đủ, tin trùng bị b�
 (chỉ xảy ra khi có lỗi) thì bỏ qua chỗ trống để không treo vĩnh viễn. File không cần cơ chế này vì mỗi file là
 một stream, tầng transport đã giao đúng thứ tự theo offset.
 
-\phanB{Mô tả cách client và server dùng \texttt{Seq}/\texttt{SeqBuffer} (đánh số ở đâu, hàng đợi gửi của server
-xử lý thế nào khi đầy) sau khi tích hợp xong.}
+\paragraph{Tích hợp ở tầng ứng dụng.} Client giữ một bộ đếm \texttt{seq} cho kết nối transport hiện tại:
+mỗi tin gửi đi được cấp \texttt{Seq} tăng dần ngay trong lúc giữ khóa cùng với việc lấy \fname{Endpoint}, và bộ
+đếm về 0 khi có kết nối mới (kết nối lại $\Rightarrow$ \texttt{conn\_id} mới $\Rightarrow$ dãy mới). Server giữ
+cho mỗi session một \fname{SeqBuffer} ở chiều nhận, nên tin của một client được định tuyến đúng thứ tự client đã
+gửi. Ở chiều gửi, vì một client nhận tin từ nhiều người gửi khác nhau nên không thể giữ nguyên \texttt{Seq} của
+người gửi: \fname{writeLoop} của session người nhận đánh lại \texttt{Seq} = 1, 2, 3\dots{} theo dãy riêng của
+\emph{người nhận} ngay trước khi gọi \texttt{SendMessage}, và tin do server tự sinh (\texttt{users},
+\texttt{error}) cũng đi qua dãy này nên không bao giờ chen ngang một tin chat. Client sắp lại bằng một
+\fname{SeqBuffer} mới cho mỗi kết nối trong \fname{listenLoop}.
+
+Hàng đợi \texttt{sendCh} của mỗi session có 64 chỗ và được ghi theo kiểu không chặn (\texttt{select} có
+\texttt{default}): nếu một người nhận quá chậm làm hàng đợi đầy, tin mới nhất gửi cho người đó bị bỏ và ghi log,
+còn goroutine đang định tuyến (của người gửi) không bị kẹt. Vì \texttt{Seq} được cấp trong \fname{writeLoop},
+tức \emph{sau} khi tin đã qua được hàng đợi, một tin bị bỏ không ``ăn'' mất một số \texttt{Seq}; nếu không,
+\fname{SeqBuffer} ở client sẽ giữ mọi tin sau đó để chờ một tin không bao giờ tới (tới giới hạn
+\texttt{MaxSeqPending} mới bỏ qua). Test \fname{TestSeqReorderedAndRenumbered} gửi \texttt{Seq} 2, 3 rồi 1 và
+kiểm tra người nhận thấy 1, 2, 3 với \texttt{Seq} liên tiếp do server đánh.
 
 \subsection{State diagram}
 \label{subsec:state}
-\phanB{State diagram của client (và của session phía server): \textsc{Discovering} $\to$ \textsc{Handshake}
-$\to$ \textsc{Connected} $\to$ \textsc{Reconnecting}/\textsc{Closed}. Trạng thái của kết nối transport
-(\texttt{waiting}/\texttt{connected}/\texttt{closed}) có trong \fname{transport.Stats.State}.}
+Client đi qua các trạng thái ở \cref{fig:state}; trạng thái của riêng kết nối transport
+(\texttt{waiting}/\texttt{connected}/\texttt{closed}) nằm trong \fname{transport.Stats.State} và được Web UI
+hiển thị cùng RTT, cwnd. Địa chỉ server lấy từ cờ \texttt{-server}; server có phát broadcast
+\texttt{COLLAB\_SERVER} lên cổng 9002 mỗi 2 s nhưng client hiện chưa tự dò, nên không có trạng thái
+\textsc{Discovering}.
+
+\begin{figure}[H]
+  \centering
+  \tikzsetnextfilename{state-client}
+  \begin{tikzpicture}[font=\small, node distance=1.5cm and 1.4cm,
+      st/.style={draw, rounded corners, fill=blue!6, minimum width=3cm, minimum height=1cm, align=center},
+      ar/.style={-{Stealth}, thick}, lab/.style={font=\scriptsize, align=center}]
+    \node[st] (hs) {\textsc{Handshaking}\\TCP :9000};
+    \node[st, right=of hs] (co) {\textsc{Connected}\\UDP, Web UI hoạt động};
+    \node[st, right=of co] (cl) {\textsc{Closed}};
+    \node[st, below=of hs] (re) {\textsc{Reconnecting}\\chờ 1, 2, 4\dots{} tối đa 30 s};
+    \draw[ar] (hs) -- node[lab, above] {AUTH\_OK, \fname{Dial} UDP,\\gửi PING đầu} (co);
+    \draw[ar] (co) -- node[lab, above] {Ctrl+C, \texttt{/quit}:\\gửi CLOSE} (cl);
+    \draw[ar] (co.south) |- node[lab, pos=0.75, below] {\texttt{Done()} đóng: không nhận gì 10 s hoặc nhận CLOSE} (re.east);
+    \draw[ar] (hs) to[bend right=25] node[lab, left] {AUTH\_FAIL,\\lỗi mạng} (re);
+    \draw[ar] (re) to[bend right=25] node[lab, right] {hết thời gian chờ} (hs);
+  \end{tikzpicture}
+  \caption{State diagram của client}
+  \label{fig:state}
+\end{figure}
+
+Phía server, một \fname{Session} đi qua \textsc{Pending} (đã \texttt{AUTH\_OK}, \fname{Registry} đã có tên nhưng
+chưa biết địa chỉ UDP) $\to$ \textsc{Active} (nhận gói UDP đầu tiên, \fname{AttachEndpoint}) $\to$ bị xóa khi
+\texttt{Done()} của kết nối đóng. Session pending mà client không bao giờ gửi UDP cũng tự biến mất sau 10 s nhờ
+chính idle timeout của transport, không cần bộ đếm giờ riêng. Khi client kết nối lại trong lúc server còn giữ
+session cũ (chưa hết 10 s), nó nhận \texttt{AUTH\_FAIL} ``đang online'' và thử lại sau backoff.

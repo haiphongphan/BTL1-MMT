@@ -44,9 +44,41 @@ trùng dữ liệu: \texttt{packet\_num} đã thấy thì không xử lý lại 
         $k_\text{tcp}$, $k_\text{udp}$; khóa công khai sai độ dài bị từ chối.
 \end{itemize}
 
-\phanB{Ảnh chụp Wireshark (bộ lọc \texttt{tcp.port == 9000 \textbar\textbar{} udp.port == 9001}): (1) message \texttt{AUTH}
-chỉ thấy chuỗi base64 của \texttt{sealed}, không thấy mật khẩu; (2) payload UDP không đọc được nội dung tin chat.
-Mô tả cách server lưu mật khẩu (\texttt{users.json}) và chống giả danh (server ghi đè trường \texttt{From}).}
+\subsection{Phía ứng dụng}
+\paragraph{Lưu mật khẩu.} \texttt{users.json} không chứa mật khẩu mà chứa, cho từng user, một \texttt{salt} ngẫu
+nhiên 8 byte và \texttt{sha256(salt $\|$ password)} (tạo bằng \fname{cmd/mkusers}). Khi đăng nhập server băm lại
+rồi so sánh, nên lộ file không lộ mật khẩu, và hai user cùng mật khẩu vẫn có hash khác nhau. Hạn chế: SHA-256
+đơn thuần tính rất nhanh nên yếu trước brute-force ngoại tuyến; bản thực tế nên dùng bcrypt hoặc Argon2. Mật
+khẩu chỉ đi trên dây bên trong trường \texttt{sealed} của message \texttt{AUTH}, đã mã hóa bằng $k_\text{tcp}$;
+server trả cùng một lý do ``tài khoản hoặc mật khẩu không chính xác'' cho cả user lạ lẫn sai mật khẩu để không
+tiết lộ user nào tồn tại.
+
+\paragraph{Chống giả danh.} Sau khi đăng nhập, danh tính của một kết nối là username đã xác thực gắn với
+\texttt{conn\_id}. Mọi tin chat/DM từ kết nối đó đều được server \emph{ghi đè} trường \texttt{From} bằng username
+này trước khi định tuyến, và meta của file cũng được ghi đè tương tự; client có sửa JSON cũng không giả danh
+được người khác (\fname{TestChatBroadcastInOrder} gửi \texttt{From = bob} từ alice và kiểm tra người nhận thấy
+alice). Một tên chỉ được online ở một kết nối: \fname{Registry.AddPending} kiểm tra và thêm trong cùng một lần
+giữ khóa, nên hai client cùng tên đăng nhập đồng thời không lọt được cả hai.
+
+\paragraph{Quan sát bằng Wireshark.} Với bộ lọc \texttt{tcp.port == 9000 || udp.port == 9001}, trên TCP chỉ thấy
+bốn message JSON của handshake; message \texttt{AUTH} có hai chuỗi base64 (\texttt{nonce}, \texttt{sealed}) và
+không có username hay mật khẩu dạng chữ. Trên UDP, mỗi gói có 12 byte header đọc được (\texttt{conn\_id},
+\texttt{packet\_num}, \texttt{flags}) và phần còn lại là byte ngẫu nhiên; tìm nội dung tin chat vừa gõ trong
+\emph{Follow UDP stream} không thấy, đúng như \fname{TestWireIsEncrypted} kiểm tra tự động.
+% Chèn ảnh chụp khi có: lưu vào report/graphics/ws-auth.png và ws-udp.png rồi bỏ comment hai khối sau.
+%\begin{figure}[H]
+%  \centering
+%  \includegraphics[width=0.95\linewidth]{graphics/ws-auth.png}
+%  \caption{Message \texttt{AUTH} trên TCP 9000: chỉ thấy base64 của \texttt{nonce} và \texttt{sealed}}
+%  \label{fig:ws-auth}
+%\end{figure}
+%\begin{figure}[H]
+%  \centering
+%  \includegraphics[width=0.95\linewidth]{graphics/ws-udp.png}
+%  \caption{Gói UDP 9001 khi đang chat: 12 byte header rõ, phần còn lại là ciphertext}
+%  \label{fig:ws-udp}
+%\end{figure}
+
 
 \subsection{Giới hạn đã biết}
 \begin{itemize}

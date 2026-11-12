@@ -14,7 +14,18 @@ và tự điều tốc, chỉ bằng thư viện chuẩn của Go:
   \item Thiết kế một goroutine sở hữu state cho mỗi kết nối: không cần mutex, \fname{go test -race} sạch.
 \end{itemize}
 
-\phanB{Kết quả phía ứng dụng: số client đồng thời, giao diện web, khả năng tự kết nối lại.}
+Ở tầng ứng dụng:
+\begin{itemize}
+  \item Server phục vụ 20 client đồng thời với số goroutine cố định (4 cho mỗi client, tổng 84) và bộ nhớ vài
+        MB; chat, tin riêng và file đi qua cùng một kết nối UDP, đúng người nhận, đúng thứ tự gửi nhờ
+        \texttt{Seq} ở tầng ứng dụng.
+  \item File được chuyển tiếp theo kiểu pipeline nên bộ nhớ server không phụ thuộc kích thước file; người nhận
+        kiểm tra SHA-256 đầu cuối; tin chat gửi trong lúc truyền file 200 MB vẫn tới trong vài chục ms.
+  \item Giao diện web chạy trên HTTP/1.1 tự viết với JavaScript thuần: danh sách user, tab chat chung và riêng,
+        gửi file kèm thanh tiến trình ở cả hai đầu, trạng thái kết nối với RTT, cwnd và tỉ lệ mất gói.
+  \item Client tự kết nối lại khi server khởi động lại và báo \texttt{CLOSE} ngay khi thoát; server tắt bằng
+        Ctrl+C cũng báo mọi client, nên không ai phải chờ idle timeout.
+\end{itemize}
 
 \subsection{Hướng phát triển}
 \begin{itemize}

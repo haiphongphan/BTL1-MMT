@@ -2,10 +2,12 @@ package server
 
 import (
 	"errors"
-	"github.com/phongphanhai06/go-collab/internal/transport"
 	"net"
 	"sync"
 	"time"
+
+	"github.com/phongphanhai06/go-collab/internal/protocol"
+	"github.com/phongphanhai06/go-collab/internal/transport"
 )
 
 type Session struct {
@@ -15,7 +17,12 @@ type Session struct {
 	UDPAddr  *net.UDPAddr
 	LastSeen time.Time
 	EP       transport.Endpoint
-	sendCh   chan []byte
+
+	// sendCh: hàng đợi tin gửi tới client này. Chỉ writeLoop đọc, nó đánh Seq rồi mới gửi, nên tin bị bỏ
+	// vì hàng đợi đầy không "ăn" mất một số Seq (client sẽ không chờ một tin không bao giờ tới).
+	sendCh chan protocol.AppMsg
+	// inSeq sắp lại tin client này gửi lên theo Seq. Chỉ serveSession dùng.
+	inSeq protocol.SeqBuffer
 }
 
 type Registry struct {
@@ -30,6 +37,9 @@ func NewRegistry() *Registry {
 		byConnID: make(map[uint32]*Session),
 	}
 }
+
+// sendQueueSize: số tin tối đa chờ gửi cho một client. Đầy thì tin mới bị bỏ (xem Session.Send).
+const sendQueueSize = 64
 
 var ErrAlreadyOnline = errors.New("registry: user đang online")
 
@@ -46,7 +56,7 @@ func (r *Registry) AddPending(username string, connID uint32, kUDP [32]byte) (*S
 		ConnID:   connID,
 		KUDP:     kUDP,
 		LastSeen: time.Now(),
-		sendCh:   make(chan []byte, 64),
+		sendCh:   make(chan protocol.AppMsg, sendQueueSize),
 	}
 	r.byName[username] = sess
 	r.byConnID[connID] = sess

@@ -17,22 +17,33 @@ type inStream struct {
 	drop  bool
 }
 
-func (sess *Session) Send(b []byte) bool {
+// Send xếp một tin vào hàng đợi gửi của session, không bao giờ chặn goroutine gọi:
+// người nhận quá chậm làm đầy hàng đợi của chính họ thì tin mới bị bỏ (và ghi log), những người khác không bị ảnh hưởng.
+func (sess *Session) Send(m protocol.AppMsg) bool {
 	select {
-	case sess.sendCh <- b:
+	case sess.sendCh <- m:
 		return true
-
 	default:
-		log.Printf("[Server] Hàng đợi của '%s' đầy, bỏ 1 tin", sess.Username)
+		log.Printf("[Server] Hàng đợi của '%s' đầy, bỏ 1 tin %s", sess.Username, m.Type)
 		return false
 	}
 }
 
+// writeLoop là goroutine DUY NHẤT gọi SendMessage cho session, nên thứ tự gửi = thứ tự vào hàng đợi.
+// Nó đánh Seq = 1, 2, 3... riêng cho người nhận này (một client nhận tin từ nhiều người gửi khác nhau);
+// client dùng SeqBuffer để giao đúng thứ tự dù tầng transport giao các stream không theo thứ tự.
 func (sess *Session) writeLoop() {
+	var seq uint64
 	for {
 		select {
-		case b := <-sess.sendCh:
-			if err := sess.EP.SendMessage(b); err != nil {
+		case m := <-sess.sendCh:
+			seq++
+			m.Seq = seq
+			b, err := json.Marshal(m)
+			if err != nil {
+				continue
+			}
+			if err := sess.EP.SendMessage(append([]byte{protocol.KindMessage}, b...)); err != nil {
 				return
 			}
 		case <-sess.EP.Done():
@@ -116,39 +127,32 @@ func (s *Server) onMessageData(sess *Session, st *inStream, d transport.Delivery
 		log.Printf("[Server] Invalid JSON from %s: %v", sess.Username, err)
 		return
 	}
-	msg.From = sess.Username // Ghi đè From để chống giả danh
-	s.routeMessage(sess, msg)
+	// Sắp lại theo Seq của client: tin tới sớm được giữ, trả về khi các tin trước đã đủ (Seq 0 = giao ngay).
+	for _, m := range sess.inSeq.Push(msg) {
+		m.From = sess.Username // Ghi đè From để chống giả danh
+		s.routeMessage(sess, m)
+	}
 }
 
 func (s *Server) sendError(to *Session, text string) {
-	b, err := json.Marshal(protocol.AppMsg{Type: "error", Text: text, TS: time.Now().UnixMilli()})
-	if err == nil {
-		to.Send(append([]byte{protocol.KindMessage}, b...))
-	}
+	to.Send(protocol.AppMsg{Type: "error", Text: text, TS: time.Now().UnixMilli()})
 }
 
 func (s *Server) routeMessage(from *Session, msg protocol.AppMsg) {
 	msg.TS = time.Now().UnixMilli()
-	payload, err := json.Marshal(msg)
-	if err != nil {
-		return
-	}
-
-	// Đóng gói thành message stream [0x01][JSON]
-	packet := append([]byte{protocol.KindMessage}, payload...)
 
 	switch msg.Type {
 	case "chat": // Broadcast cho tất cả mọi người ngoại trừ người gửi
 		for _, target := range s.reg.Snapshot() {
 			if target != from {
-				target.Send(packet)
+				target.Send(msg)
 			}
 		}
 
 	case "dm": // Gửi đích danh cho 1 user
 		target := s.reg.GetByName(msg.To)
 		if target != nil && target.EP != nil {
-			target.Send(packet)
+			target.Send(msg)
 		} else {
 			// Báo lỗi lại cho người gửi nếu receiver không online
 			s.sendError(from, "User '"+msg.To+"' hiện không online.")
@@ -166,22 +170,13 @@ func (s *Server) dropSession(sess *Session) {
 }
 
 func (s *Server) broadcastUserList() {
-	users := s.reg.Names()
 	msg := protocol.AppMsg{
 		Type:  "users",
-		Users: users,
+		Users: s.reg.Names(),
 		TS:    time.Now().UnixMilli(),
 	}
-	payload, err := json.Marshal(msg)
-	if err != nil {
-		return
-	}
-	packet := append([]byte{protocol.KindMessage}, payload...)
-
 	// Snapshot danh sách để gửi không giữ lock
 	for _, sess := range s.reg.Snapshot() {
-		if sess.EP != nil {
-			sess.Send(packet)
-		}
+		sess.Send(msg)
 	}
 }

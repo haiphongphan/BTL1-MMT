@@ -7,7 +7,9 @@ import (
 	"log"
 	"math/rand/v2"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/phongphanhai06/go-collab/internal/client"
@@ -55,6 +57,14 @@ func main() {
 		log.Fatalf("Đăng nhập thất bại: %v", err)
 	}
 	fmt.Println("✅ Đăng nhập THÀNH CÔNG!")
+	go func() {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+		<-sig
+		fmt.Println("\nĐang thoát...")
+		c.Close()
+		os.Exit(0)
+	}()
 	if *web != "" {
 		ui := webui.New(c)
 		go func() {

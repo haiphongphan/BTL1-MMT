@@ -186,3 +186,30 @@ func TestDuplicateLoginRejected(t *testing.T) {
 		t.Fatalf("err = %v, want ErrAlreadyOnline", err)
 	}
 }
+
+// Seq: tin client gửi lên bị đảo thứ tự (Seq 2 tới trước Seq 1) vẫn được định tuyến đúng thứ tự,
+// và server đánh lại Seq = 1, 2, 3... theo dãy riêng của người nhận.
+func TestSeqReorderedAndRenumbered(t *testing.T) {
+	s := newTestServer()
+	alice := join(t, s, "alice", 1)
+	bob := join(t, s, "bob", 2)
+
+	send(alice, protocol.AppMsg{Type: "chat", Text: "2", Seq: 2}) // tới sớm → server giữ lại
+	send(alice, protocol.AppMsg{Type: "chat", Text: "3", Seq: 3})
+	send(alice, protocol.AppMsg{Type: "chat", Text: "1", Seq: 1}) // lấp chỗ trống → giao 1, 2, 3
+
+	var seqs []uint64
+	for i := 1; i <= 3; i++ {
+		m := next(t, bob, "chat")
+		if m.Text != strconv.Itoa(i) {
+			t.Fatalf("tin thứ %d sai thứ tự: %q", i, m.Text)
+		}
+		seqs = append(seqs, m.Seq)
+	}
+	// bob đã nhận ít nhất 1 tin "users" trước đó (cũng mang Seq), nên 3 tin chat phải liên tiếp và > 0
+	for i := 1; i < len(seqs); i++ {
+		if seqs[i] != seqs[i-1]+1 || seqs[0] == 0 {
+			t.Fatalf("Seq server đánh cho bob không liên tiếp: %v", seqs)
+		}
+	}
+}
