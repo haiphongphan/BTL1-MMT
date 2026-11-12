@@ -158,8 +158,29 @@ tin #2 có thể tới trước tin #1. Để giữ đúng thứ tự mà vẫn 
 - Server **không bỏ tin** khi hàng đợi gửi của 1 người nhận đầy (bỏ tin sẽ để lại lỗ hổng `Seq`): hàng đợi chứa
   4096 tin, đầy thì ngắt client quá chậm đó (client tự kết nối lại).
 
-### 3.6 State diagram của client (B vẽ, đưa vào báo cáo)
+### 3.6 State diagram của client
 
+Trạng thái hiển thị trên Web UI (`/api/status` → `state`) và trong `internal/client/core.go`:
+
+```mermaid
+stateDiagram-v2
+  [*] --> Handshake: ConnectWith()
+  Handshake --> Disconnected: AUTH_FAIL / lỗi mạng
+  Handshake --> Connected: AUTH_OK + Dial UDP
+  Connected --> Reconnecting: Done() (CLOSE từ server / im lặng 10 s)
+  Reconnecting --> Connected: handshake lại thành công
+  Reconnecting --> Reconnecting: thất bại, chờ 1 s, 2 s, 4 s ... tối đa 30 s
+  Connected --> Disconnected: Close() / Ctrl+C (gửi CLOSE)
+  Reconnecting --> Disconnected: Close()
+  Disconnected --> [*]
+```
+
+| Trạng thái | Ý nghĩa | Sự kiện chuyển |
+|---|---|---|
+| Handshake | đang chạy HELLO → KEYX → AUTH qua TCP | `AUTH_OK` ⇒ mở kết nối UDP (PING đầu, gửi lại tới khi server trả lời) |
+| `connected` | kết nối UDP hoạt động, PING mỗi 2 s khi rảnh | `Done()` ⇒ `reconnecting`; `Close()` ⇒ `disconnected` |
+| `reconnecting` | handshake lại từ đầu (conn_id, khóa mới; `Seq` đếm lại từ 1) | thành công ⇒ `connected`; thất bại ⇒ chờ gấp đôi (≤ 30 s) rồi thử lại |
+| `disconnected` | người dùng thoát | — |
 
 ### 3.7 Tham số mặc định
 

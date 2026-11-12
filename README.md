@@ -87,7 +87,7 @@ internal/server          handshake + auth, registry user, định tuyến chat/D
 internal/client          logic client: kết nối lại, gửi/nhận file, event log cho UI
 internal/webui           HTTP/1.1 server tự viết + static (HTML/CSS/JS thuần)
 internal/e2e             test hệ thống
-scripts/                 run_clients.sh, load_test.sh, plotcc (vẽ đồ thị cwnd)
+scripts/                 run_clients.sh, load_test.sh, plotcc (vẽ đồ thị cwnd), mkreport (báo cáo → HTML → PDF)
 docs/                    protocol.md, reliability.md, test-results.md
 ```
 

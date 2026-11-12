@@ -22,7 +22,7 @@ mặc định CUBIC.
 | 3 | File 1 KB / 10 MB / 200 MB, loss 10% | SHA-256 khớp | ✅ khớp ở mọi kích thước (bảng dưới) | `TestFileTransfer` |
 | 4 | Gửi file 200 MB + chat cùng lúc | Chat trễ < 300 ms | ✅ p50 32 ms, **p95 174 ms**, max 395 ms (200 mẫu) | `TestChatLatencyDuringFile` |
 | 5 | Ctrl+C 1 client | Server báo leave ≤ 10 s, không crash | ✅ Ctrl+C: **20 ms** (client gửi CLOSE). `kill -9`: **10 s** (idle timeout). Sau đó đăng nhập lại được | `TestClientKilled` |
-| 6 | Tắt server rồi bật lại | Client tự kết nối lại | ✅ client chuyển `reconnecting` rồi `connected` sau ≈1 s khi server chạy lại; chat tiếp được | `TestServerRestartReconnect` |
+| 6 | Tắt server rồi bật lại | Client tự kết nối lại | ✅ Tắt bằng Ctrl+C (server gửi CLOSE): client kết nối lại sau ≈1 s. **`kill -9` server** (không gửi CLOSE): client phát hiện sau 10.1 s (idle timeout), kết nối lại xong sau 11.1 s. Chat tiếp được trong cả 2 trường hợp | `TestServerRestartReconnect`, `TestServerCrashReconnect` |
 | 7 | Sai mật khẩu / user lạ / đăng nhập trùng | `AUTH_FAIL` | ✅ cả 3 trường hợp nhận `AUTH_FAIL` kèm lý do | `TestAuthFail` |
 | 8 | Gói rác vào cổng UDP | Server bỏ qua, không crash | ✅ 5000 gói (ngẫu nhiên, quá ngắn, header đúng định dạng + conn_id thật + payload rác): server vẫn chạy, client không bị ngắt, chat bình thường | `TestGarbageUDP` |
 | 9 | 20 client bot | Ổn định, goroutine không tăng | ✅ xem mục dưới | `TestManyClientsNoLeak`, `scripts/load_test.sh` |

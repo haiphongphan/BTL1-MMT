@@ -1,7 +1,7 @@
 # Báo cáo BTL1 — Ứng dụng cộng tác client–server trên giao thức tin cậy tự viết (Go)
 
-> **Bản nháp.** Các mục do máy sinh từ code và số đo thật. Nhóm cần: điền tên/MSSV, chèn ảnh Wireshark (mục 8),
-> vẽ lại sơ đồ Mermaid thành ảnh (dán vào [mermaid.live](https://mermaid.live)), đọc lại văn phong, rồi xuất PDF.
+> **Bản nháp** (khung này không được in ra PDF). Còn cần: điền tên/MSSV, chèn ảnh Wireshark (mục 7), đọc lại.
+> Xuất PDF: `go run ./scripts/mkreport` rồi mở `docs/report.html` bằng trình duyệt → Ctrl+P → Save as PDF.
 
 | Thành viên | MSSV | Phụ trách |
 |---|---|---|
@@ -295,7 +295,7 @@ Kịch bản 1–9 tự động trong `internal/e2e` (server + client thật); s
 | 3 | File 1 KB / 10 MB / 200 MB, loss 0% và 10% | ✅ SHA-256 khớp mọi trường hợp (bảng dưới) |
 | 4 | Gửi file 200 MB + chat cùng lúc | ✅ độ trễ chat p50 32 ms, p95 174 ms (< 300 ms) |
 | 5 | Ctrl+C / `kill -9` 1 client | ✅ server báo rời đi sau 20 ms / 10 s, không crash |
-| 6 | Tắt server rồi bật lại | ✅ client tự kết nối lại sau ≈1 s |
+| 6 | Tắt server rồi bật lại | ✅ tắt bình thường: kết nối lại sau ≈1 s; `kill -9`: phát hiện sau 10.1 s, kết nối lại sau 11.1 s |
 | 7 | Sai mật khẩu / user lạ / đăng nhập trùng | ✅ `AUTH_FAIL` kèm lý do |
 | 8 | 5000 gói rác vào cổng UDP | ✅ bị bỏ qua, client không bị ngắt |
 | 9 | 20 bot × 5 phút | ✅ goroutine 86 ổn định ⇒ 6 khi thoát; CPU 3.1%; không mất tin |
