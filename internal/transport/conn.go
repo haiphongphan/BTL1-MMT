@@ -610,6 +610,9 @@ func (c *Conn) publishStats() {
 		LostPkts: c.lostPkts,
 		SentPkts: c.sentPkts,
 		State:    "connected",
+
+		Peer:      c.peer, // không bao giờ bị sửa tại chỗ (mỗi gói nhận có 1 *UDPAddr mới), nên chia sẻ con trỏ được
+		LastHeard: c.lastHeard,
 	}
 
 	if c.closed {
