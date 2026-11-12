@@ -1,3 +1,4 @@
+// Package client là logic phía client: đăng nhập, kết nối lại, gửi/nhận chat và file, EventLog cho UI.
 package client
 
 import (
@@ -49,6 +50,7 @@ type Status struct {
 	LossPct  float64  `json:"loss_pct"`
 }
 
+// NewClient tạo client chưa kết nối; file nhận được lưu vào thư mục "downloads".
 func NewClient(username string) *Client {
 	return &Client{
 		User:        username,
@@ -57,6 +59,7 @@ func NewClient(username string) *Client {
 	}
 }
 
+// OnlineUsers trả về bản sao danh sách user đang online (theo tin "users" mới nhất từ server).
 func (c *Client) OnlineUsers() []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -82,6 +85,7 @@ func (c *Client) setState(st string) {
 	c.Events.Add("status", st)
 }
 
+// Status trả về trạng thái kết nối và số liệu mạng (RTT, cwnd, tỉ lệ mất gói) cho Web UI.
 func (c *Client) Status() Status {
 	c.mu.Lock()
 	st := Status{User: c.User, State: c.state, Online: append([]string(nil), c.online...)}
@@ -161,6 +165,7 @@ func (c *Client) dial() error {
 	return nil
 }
 
+// Close đóng kết nối (gửi CLOSE cho server) và dừng việc tự kết nối lại.
 func (c *Client) Close() {
 	c.mu.Lock()
 	c.closing = true
@@ -171,6 +176,8 @@ func (c *Client) Close() {
 	}
 }
 
+// ConnectTCPAndAuth chạy handshake TCP: HELLO → KEYX → AUTH (mật khẩu mã hóa bằng k_tcp) → AUTH_OK.
+// Trả về KEYX (conn_id, cổng UDP) và khóa k_udp cho transport.
 func (c *Client) ConnectTCPAndAuth(serverTCPAddr, password string) (*protocol.KeyX, [32]byte, error) {
 	conn, err := net.DialTimeout("tcp", serverTCPAddr, 5*time.Second)
 	if err != nil {
@@ -217,6 +224,7 @@ func (c *Client) ConnectTCPAndAuth(serverTCPAddr, password string) (*protocol.Ke
 	return &keyx, kUDP, nil
 }
 
+// AttachEndpoint gắn kết nối transport mới (kể cả khi kết nối lại) và chạy goroutine nhận dữ liệu.
 func (c *Client) AttachEndpoint(ep transport.Endpoint) {
 	c.mu.Lock()
 	c.ep = ep
@@ -329,10 +337,12 @@ func (c *Client) send(m protocol.AppMsg) error {
 	return ep.SendMessage(append([]byte{protocol.KindMessage}, b...))
 }
 
+// SendChat gửi tin chat chung cho mọi người đang online.
 func (c *Client) SendChat(text string) error {
 	return c.send(protocol.AppMsg{Type: "chat", Text: text})
 }
 
+// SendDM gửi tin nhắn riêng cho user to; server báo lỗi nếu người nhận không online.
 func (c *Client) SendDM(to, text string) error {
 	return c.send(protocol.AppMsg{Type: "dm", To: to, Text: text})
 }

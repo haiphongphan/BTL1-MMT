@@ -35,6 +35,7 @@ func newCubic() *cubic {
 	return &cubic{cwnd: cubicInitCwnd, ssthresh: math.Inf(1)}
 }
 
+// Window trả về cwnd hiện tại (byte).
 func (c *cubic) Window() int { return int(c.cwnd) }
 
 // Ssthresh trả -1 khi còn đang slow start (ssthresh = ∞), dùng cho cclog.
@@ -52,6 +53,7 @@ func (c *cubic) wCubic(t float64) float64 {
 	return (cubicC*math.Pow(t-k, 3) + wMaxSeg) * mss
 }
 
+// OnAck tăng cwnd: slow start dưới ssthresh, sau đó theo đường CUBIC / Reno-friendly (RFC 9438).
 func (c *cubic) OnAck(acked int, now time.Time) {
 	a := float64(acked)
 	defer func() { c.cwnd = math.Min(c.cwnd, cubicMaxCwnd) }()
@@ -82,6 +84,7 @@ func (c *cubic) OnAck(acked int, now time.Time) {
 	}
 }
 
+// OnLoss xử lý 1 đợt mất gói: wMax = cwnd, cwnd = β·cwnd (β = 0.7), bắt đầu chu kỳ CUBIC mới.
 func (c *cubic) OnLoss(now time.Time) {
 	c.wMax = c.cwnd
 	c.cwnd = math.Max(c.cwnd*cubicBeta, cubicMinCwnd)

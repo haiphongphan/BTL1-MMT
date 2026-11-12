@@ -79,6 +79,7 @@ type SendStream struct {
 	closed bool   // call Close()?
 }
 
+// Write cắt p thành các frame ≤ 1000 byte và xếp vào hàng đợi gửi; bị chặn khi hàng đợi bulk đầy (backpressure).
 func (s *SendStream) Write(p []byte) (int, error) {
 	if s.closed {
 		return 0, ErrClosed

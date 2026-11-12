@@ -1,3 +1,4 @@
+// Package server: handshake TCP + xác thực, registry user, định tuyến chat/DM và chuyển tiếp file.
 package server
 
 import (
@@ -34,6 +35,7 @@ type Server struct {
 	usersMu sync.Mutex
 }
 
+// NewServer đọc file tài khoản và tạo server (chưa mở cổng nào).
 func NewServer(usersFilePath string, udpPort int) (*Server, error) {
 	data, err := os.ReadFile(usersFilePath)
 	if err != nil {
@@ -53,6 +55,7 @@ func NewServer(usersFilePath string, udpPort int) (*Server, error) {
 	return srv, nil
 }
 
+// ListenUDP mở socket UDP dùng chung cho mọi client; loss > 0 để giả lập mất gói khi gửi.
 func (s *Server) ListenUDP(loss float64) error {
 	sock, err := net.ListenUDP("udp", &net.UDPAddr{Port: s.udpPort})
 	if err != nil {
@@ -68,6 +71,7 @@ func (s *Server) ListenUDP(loss float64) error {
 	return nil
 }
 
+// ListenTCP nghe handshake trên addr; chặn cho tới khi lỗi.
 func (s *Server) ListenTCP(addr string) error {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {

@@ -1,3 +1,4 @@
+// Package webui là HTTP server tự viết trên socket TCP, phục vụ trang tĩnh (JS thuần) và API JSON cho client.
 package webui
 
 import (
@@ -36,8 +37,10 @@ type Server struct {
 	c *client.Client
 }
 
+// New tạo Web UI cho client c.
 func New(c *client.Client) *Server { return &Server{c: c} }
 
+// ListenAndServe nghe HTTP trên addr (HTTP/1.1 tự viết trên socket TCP, mỗi kết nối 1 goroutine).
 func (s *Server) ListenAndServe(addr string) error {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {

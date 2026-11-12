@@ -248,6 +248,86 @@ func TestServerRestartReconnect(t *testing.T) {
 	waitEvent(t, bob, &s0, "chat", 5*time.Second, func(ev client.Event) bool { return msgOf(ev).Text == "sau khi reconnect" })
 }
 
+// freePort xin OS 1 cổng TCP/UDP trống.
+func freePort(t *testing.T, network string) int {
+	t.Helper()
+	if network == "udp" {
+		c, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		return c.LocalAddr().(*net.UDPAddr).Port
+	}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	return l.Addr().(*net.TCPAddr).Port
+}
+
+// Kịch bản 6 (bản "crash"): server bị kill -9 (không kịp gửi CLOSE) rồi chạy lại ⇒ client phát hiện qua
+// idle timeout 10 s, tự kết nối lại và chat tiếp được.
+func TestServerCrashReconnect(t *testing.T) {
+	if testing.Short() {
+		t.Skip("cần build binary, > 10s")
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("cần kill -9")
+	}
+	bin := filepath.Join(t.TempDir(), "server")
+	if out, err := exec.Command("go", "build", "-o", bin, "../../cmd/server").CombinedOutput(); err != nil {
+		t.Fatalf("build server: %v\n%s", err, out)
+	}
+	users := writeUsers(t)
+	tcp, udp := freePort(t, "tcp"), freePort(t, "udp")
+	addr := fmt.Sprintf("127.0.0.1:%d", tcp)
+	run := func() *exec.Cmd {
+		cmd := exec.Command(bin, "-tcp", addr, "-udp-port", fmt.Sprint(udp), "-users", users)
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
+		for i := 0; i < 100; i++ { // đợi server nghe
+			if c, err := net.Dial("tcp", addr); err == nil {
+				c.Close()
+				return cmd
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		t.Fatal("server không chạy")
+		return nil
+	}
+
+	srv := run()
+	alice := connect(t, addr, "alice", client.NetOptions{})
+	bob := connect(t, addr, "bob", client.NetOptions{})
+	var s0, s1 int64
+	alice.SendChat("a")
+	waitEvent(t, bob, &s0, "chat", 5*time.Second, nil)
+	bob.SendChat("b")
+	waitEvent(t, alice, &s1, "chat", 5*time.Second, nil)
+
+	down := time.Now()
+	srv.Process.Kill() // kill -9: không gửi CLOSE
+	srv.Wait()
+	time.Sleep(time.Second)
+	run()
+	waitState(t, alice, "reconnecting", 15*time.Second)
+	detect := time.Since(down)
+	waitState(t, alice, "connected", 40*time.Second)
+	waitState(t, bob, "connected", 40*time.Second)
+	waitOnline(t, alice, "alice", "bob")
+	t.Logf("RESULT server kill -9: client phát hiện sau %v, kết nối lại xong sau %v",
+		detect.Round(100*time.Millisecond), time.Since(down).Round(100*time.Millisecond))
+
+	if err := alice.SendChat("sau crash"); err != nil {
+		t.Fatal(err)
+	}
+	waitEvent(t, bob, &s0, "chat", 5*time.Second, func(ev client.Event) bool { return msgOf(ev).Text == "sau crash" })
+}
+
 func waitState(t *testing.T, c *client.Client, want string, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)

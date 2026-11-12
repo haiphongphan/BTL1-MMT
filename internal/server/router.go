@@ -53,6 +53,8 @@ func (sess *Session) writeLoop() {
 	}
 }
 
+// AttachEndpoint gắn kết nối transport cho user conn_id, chạy goroutine đọc/ghi của session
+// và báo danh sách online mới cho mọi người.
 func (s *Server) AttachEndpoint(connID uint32, ep transport.Endpoint) bool {
 	sess := s.reg.Attach(connID, ep)
 	if sess == nil {

@@ -31,6 +31,7 @@ type Registry struct {
 	byConnID map[uint32]*Session
 }
 
+// NewRegistry tạo registry rỗng.
 func NewRegistry() *Registry {
 	return &Registry{
 		byName:   make(map[string]*Session),
@@ -40,6 +41,7 @@ func NewRegistry() *Registry {
 
 var ErrAlreadyOnline = errors.New("registry: user đang online")
 
+// AddPending ghi nhận user vừa đăng nhập đúng (chưa có kết nối UDP). Trả ErrAlreadyOnline nếu user đang online.
 func (r *Registry) AddPending(username string, connID uint32, kUDP [32]byte) (*Session, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -60,18 +62,21 @@ func (r *Registry) AddPending(username string, connID uint32, kUDP [32]byte) (*S
 	return sess, nil
 }
 
+// GetByName tìm session theo tên user.
 func (r *Registry) GetByName(name string) *Session {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.byName[name]
 }
 
+// GetByConnID tìm session theo conn_id.
 func (r *Registry) GetByConnID(connID uint32) *Session {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.byConnID[connID]
 }
 
+// Attach gắn kết nối transport vào session đang chờ; trả nil nếu không có hoặc đã gắn rồi.
 func (r *Registry) Attach(connID uint32, ep transport.Endpoint) *Session {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -83,6 +88,7 @@ func (r *Registry) Attach(connID uint32, ep transport.Endpoint) *Session {
 	return sess
 }
 
+// Remove xóa session (chỉ khi đúng là session hiện tại của user đó); trả true nếu đã xóa.
 func (r *Registry) Remove(sess *Session) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -95,6 +101,7 @@ func (r *Registry) Remove(sess *Session) bool {
 	return true
 }
 
+// RemoveIfPending xóa session nếu nó vẫn chưa có kết nối UDP (handshake bỏ dở).
 func (r *Registry) RemoveIfPending(sess *Session) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -106,6 +113,7 @@ func (r *Registry) RemoveIfPending(sess *Session) bool {
 	return true
 }
 
+// Names trả về tên mọi user đã đăng nhập.
 func (r *Registry) Names() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -117,6 +125,7 @@ func (r *Registry) Names() []string {
 	return names
 }
 
+// Snapshot trả về các session đã có kết nối UDP, để gửi tin mà không giữ lock.
 func (r *Registry) Snapshot() []*Session {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

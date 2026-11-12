@@ -30,6 +30,7 @@ func DeriveKeys(priv *ecdh.PrivateKey, peerPub []byte) (kTCP, kUDP [32]byte, err
 	return
 }
 
+// NewAEAD tạo bộ mã hóa AES-256-GCM từ khóa 32 byte.
 func NewAEAD(key [32]byte) (cipher.AEAD, error) {
 	block, err := aes.NewCipher(key[:])
 	if err != nil {

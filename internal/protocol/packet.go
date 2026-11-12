@@ -1,3 +1,5 @@
+// Package protocol định nghĩa định dạng trên dây: header gói UDP, các frame, message handshake TCP,
+// nội dung stream tầng app (AppMsg, FileMeta) và SeqBuffer giữ thứ tự tin nhắn.
 package protocol
 
 import (
@@ -42,6 +44,7 @@ func (h *Header) Marshal(buffer []byte) {
 	binary.BigEndian.PutUint32(buffer[8:12], h.PacketNum)
 }
 
+// ParseHeader đọc header 12 byte ở đầu gói UDP.
 func ParseHeader(buffer []byte) (Header, error) {
 	if len(buffer) < HeaderSize {
 		return Header{}, ErrShort

@@ -53,6 +53,8 @@ type delayedPkt struct {
 	addr *net.UDPAddr
 }
 
+// WriteToUDP gửi gói qua bộ giả lập: có thể bỏ (Loss), trễ (Delay/Jitter, giữ FIFO) hoặc xếp hàng
+// ở nút cổ chai (Rate/QueueBytes).
 func (l *LossyConn) WriteToUDP(b []byte, addr *net.UDPAddr) (int, error) {
 	if rand.Float64() < l.Loss {
 		return len(b), nil // lose package, pretend to finish sending

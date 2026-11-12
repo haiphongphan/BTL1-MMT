@@ -8,6 +8,7 @@ import (
 	"time"
 )
 
+// StartDiscovery phát broadcast UDP :9002 mỗi 2 giây để client trong LAN tìm được server.
 func (s *Server) StartDiscovery(ctx context.Context, lanIP string) {
 	addr := &net.UDPAddr{IP: net.IPv4bcast, Port: 9002}
 	conn, err := net.DialUDP("udp4", nil, addr)

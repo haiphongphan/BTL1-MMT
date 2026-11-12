@@ -1,3 +1,5 @@
+// Package transport biến UDP thành kênh tin cậy, mã hóa (AES-GCM), ghép nhiều stream độc lập
+// (không Head-of-Line blocking) và tự điều tốc (CUBIC). Xem docs/reliability.md.
 package transport
 
 import (

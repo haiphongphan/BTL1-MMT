@@ -48,6 +48,7 @@ type Mux struct {
 	conns map[uint32]*Conn
 }
 
+// NewMux tạo bộ phân kênh phía server trên 1 socket UDP: gói được chuyển tới Conn theo conn_id trong header.
 func NewMux(sock PacketConn) *Mux {
 	m := &Mux{
 		sock:  sock,

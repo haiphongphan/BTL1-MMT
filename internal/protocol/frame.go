@@ -57,6 +57,7 @@ func (a *AckFrame) Contains(p uint32) bool {
 	return false
 }
 
+// AppendStream nối 1 STREAM frame vào b.
 func AppendStream(b []byte, f *StreamFrame) []byte {
 	var flags byte
 	if f.Fin {
@@ -69,6 +70,7 @@ func AppendStream(b []byte, f *StreamFrame) []byte {
 	return append(b, f.Data...)
 }
 
+// AppendAck nối 1 ACK frame (cửa sổ nhận + các range) vào b.
 func AppendAck(b []byte, a *AckFrame) []byte {
 	b = append(b, FrameAck)
 	b = binary.BigEndian.AppendUint32(b, a.Window)
@@ -80,10 +82,12 @@ func AppendAck(b []byte, a *AckFrame) []byte {
 	return b
 }
 
+// AppendPing nối 1 PING frame vào b.
 func AppendPing(b []byte) []byte {
 	return append(b, FramePing)
 }
 
+// AppendClose nối 1 CLOSE frame (kèm lý do) vào b.
 func AppendClose(b []byte, c *CloseFrame) []byte {
 	r := c.Reason
 	if len(r) > MaxCloseReason {
@@ -98,6 +102,7 @@ func AppendClose(b []byte, c *CloseFrame) []byte {
 	return append(b, r...)
 }
 
+// ParseFrames tách phần payload đã giải mã thành các frame; dữ liệu cụt hoặc loại frame lạ trả về lỗi.
 func ParseFrames(b []byte) ([]Frame, error) {
 	var out []Frame
 	for len(b) > 0 {

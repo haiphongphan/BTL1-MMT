@@ -10,6 +10,7 @@ const maxFileMeta = 64 << 10 // meta JSON tối đa 64 KB
 
 var ErrBadFileHeader = errors.New("protocol: header file không hợp lệ")
 
+// EncodeFileHeader tạo phần đầu stream file: [0x02][meta_len uint32][JSON FileMeta].
 func EncodeFileHeader(m FileMeta) ([]byte, error) {
 	meta, err := json.Marshal(m)
 	if err != nil {
@@ -24,6 +25,8 @@ type FileHeaderParser struct {
 	buf []byte
 }
 
+// Feed nhận thêm dữ liệu đầu stream file. Khi đủ header thì trả về meta và phần dữ liệu file còn lại
+// trong b; chưa đủ thì meta = nil.
 func (p *FileHeaderParser) Feed(b []byte) (meta *FileMeta, rest []byte, err error) {
 	p.buf = append(p.buf, b...)
 	if len(p.buf) < 5 {

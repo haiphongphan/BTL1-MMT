@@ -46,12 +46,16 @@ type congestionController interface {
 
 type fixedWindow struct{}
 
+// Window: cửa sổ cố định 64 KB.
 func (fixedWindow) Window() int {
 	return 64 * 1024
 }
 
+// OnAck: cửa sổ cố định không đổi khi có ACK.
 func (fixedWindow) OnAck(acked int, now time.Time) {}
-func (fixedWindow) OnLoss(now time.Time)           {}
+
+// OnLoss: cửa sổ cố định không đổi khi mất gói.
+func (fixedWindow) OnLoss(now time.Time) {}
 
 // ccAlgo: thuật toán congestion control cho các Conn tạo ra sau này ("cubic" mặc định, hoặc "fixed").
 var ccAlgo atomic.Value
@@ -185,18 +189,22 @@ func newConn(sock PacketConn, peer *net.UDPAddr, id uint32, key [32]byte, isServ
 }
 
 /* ========== API endpoint for app ==========*/
+// Recv trả về channel dữ liệu nhận được, đúng thứ tự trong từng stream.
 func (c *Conn) Recv() <-chan Delivery {
 	return c.recvCh
 }
 
+// Done đóng khi kết nối kết thúc (CLOSE, idle timeout hoặc Close()).
 func (c *Conn) Done() <-chan struct{} {
 	return c.done
 }
 
+// Stats trả về số liệu mới nhất (RTT, cwnd, số gói gửi/mất); an toàn khi gọi từ goroutine khác.
 func (c *Conn) Stats() Stats {
 	return *c.stats.Load()
 }
 
+// ID trả về conn_id của kết nối.
 func (c *Conn) ID() uint32 {
 	return c.id
 }
@@ -501,7 +509,7 @@ func (c *Conn) rto() time.Duration {
 
 func (c *Conn) keepAlive(now time.Time) {
 	if now.Sub(c.lastHeard) > idleTimeout {
-		log.Printf("transport: conn %d timeout (silence in %v)", c.id, idleTimeout)
+		log.Printf("[transport] conn %d timeout (silence in %v)", c.id, idleTimeout)
 		c.shutdown()
 		return
 	}
@@ -620,7 +628,7 @@ func (c *Conn) sendPacket(frames []*protocol.StreamFrame, now time.Time) {
 	pkt := c.seal(pn, payload)
 
 	if _, err := c.sock.WriteToUDP(pkt, c.peer); err != nil {
-		log.Printf("transport: conn %d send packet: %v", c.id, err)
+		log.Printf("[transport] conn %d send packet: %v", c.id, err)
 	}
 
 	c.lastSent = now
