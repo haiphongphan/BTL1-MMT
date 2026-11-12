@@ -80,7 +80,8 @@ người gửi.
 \subsection{Gửi file qua server}
 \begin{figure}[H]
   \centering
-  \tikzsetnextfilename{seq-file}
+  % Không cache hình này: \cref bên trong tikzpicture chỉ resolve được khi vẽ trong job chính
+  \tikzset{external/export next=false}
   \begin{tikzpicture}[font=\small, x=0.9cm, y=0.5cm,
       msg/.style={-{Stealth}, thick}, ack/.style={-{Stealth}, thick, blue!60!black},
       lab/.style={font=\scriptsize, above, sloped, pos=0.5},
