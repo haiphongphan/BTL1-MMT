@@ -30,6 +30,10 @@
 % Đồ thị cwnd vẽ trực tiếp từ dữ liệu đo (data/*.dat)
 \usepackage{pgfplots}
 \pgfplotsset{compat=1.17}
+% Cache hình TikZ/pgfplots vào tikz-cache/ (cần -shell-escape); \cachedtikz{tên}{tikzpicture} đặt tên file cache
+\usetikzlibrary{external}
+\tikzexternalize[prefix=tikz-cache/]
+\newcommand{\cachedtikz}[2]{\tikzsetnextfilename{#1}#2}
 \usetikzlibrary{arrows.meta,positioning,shapes.multipart,fit,calc,decorations.pathreplacing}
 
 % References
