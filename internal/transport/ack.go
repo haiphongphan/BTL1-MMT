@@ -2,21 +2,25 @@ package transport
 
 import "github.com/phongphanhai06/go-collab/internal/protocol"
 
-const ackHistory = 4096 // remember/ack 4096 closest packet numbers
+// ackHistory: chỉ nhớ (và ACK) 4096 packet_num gần packet_num lớn nhất đã nhận.
+const ackHistory = 4096
 
+// ackTracker là phía nhận của ACK: nhớ các packet_num đã nhận để (1) lọc gói trùng và (2) tạo các
+// AckRange gửi về bên gửi. Chỉ goroutine run() dùng nên không cần khóa.
 type ackTracker struct {
-	seen    map[uint32]struct{}
-	largest uint32
-	any     bool // receive any packets?
+	seen    map[uint32]struct{} // các packet_num đã nhận
+	largest uint32              // packet_num lớn nhất đã nhận
+	any     bool                // đã nhận được gói nào chưa (largest = 0 chưa chắc là đã nhận gói 0)
 }
 
-func newAcKTracker() ackTracker {
+// newAckTracker tạo ackTracker rỗng.
+func newAckTracker() ackTracker {
 	return ackTracker{
 		seen: map[uint32]struct{}{},
 	}
 }
 
-// mark pn received, false if the packet is already received
+// add đánh dấu đã nhận gói pn; trả về false nếu gói này đã nhận trước đó (gói trùng).
 func (t *ackTracker) add(pn uint32) bool {
 	if _, ok := t.seen[pn]; ok {
 		return false
@@ -30,8 +34,9 @@ func (t *ackTracker) add(pn uint32) bool {
 	return true
 }
 
-// ranges returns maximum "maxRanges" consecutive periods, scan backward from the largest packet
-// 1–5, 7–9, 12 → [12..12] [7..9] [1..5]
+// ranges trả về tối đa maxRanges đoạn packet_num liên tục đã nhận, quét lùi từ gói lớn nhất
+// (nên đoạn mới nhất đứng đầu). Ví dụ đã nhận 1–5, 7–9, 12 → [12..12] [7..9] [1..5].
+// Chỉ quét trong ackHistory gói gần nhất; gói cũ hơn thì bên gửi đã coi là mất và gửi lại từ lâu.
 func (t *ackTracker) ranges(maxRanges int) []protocol.AckRange {
 	if !t.any {
 		return nil
@@ -39,7 +44,7 @@ func (t *ackTracker) ranges(maxRanges int) []protocol.AckRange {
 
 	var out []protocol.AckRange
 	pn := int64(t.largest)
-	low := int64(t.largest) - ackHistory // convert before subtracting, otherwise uint32 underflows when largest < 4096
+	low := int64(t.largest) - ackHistory // đổi sang int64 trước khi trừ, nếu không uint32 bị tràn ngược khi largest < 4096
 
 	for pn >= 0 && pn > low && len(out) < maxRanges {
 		if _, ok := t.seen[uint32(pn)]; !ok {
@@ -63,8 +68,8 @@ func (t *ackTracker) ranges(maxRanges int) []protocol.AckRange {
 	return out
 }
 
-// prune deletes "pn"s that are too old to prevent map's infinite growth, call regularly
-// The old packet that are retransmitted is considered "new", but recvStream filters it anyway
+// prune xóa các packet_num quá cũ để map không phình mãi; gọi định kỳ (mỗi tick).
+// Sau khi xóa, nếu gói cũ đó tới lại thì bị coi là gói mới, nhưng không sao: recvStream sẽ bỏ dữ liệu trùng.
 func (t *ackTracker) prune() {
 	if len(t.seen) < 2*ackHistory {
 		return

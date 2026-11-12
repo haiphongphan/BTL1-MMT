@@ -7,6 +7,7 @@ import (
 	"time"
 )
 
+// PacketConn là phần của *net.UDPConn mà transport dùng; tách ra interface để test có thể thay bằng LossyConn.
 type PacketConn interface {
 	ReadFromUDP(b []byte) (int, *net.UDPAddr, error)
 	WriteToUDP(b []byte, addr *net.UDPAddr) (int, error)
@@ -20,7 +21,7 @@ const (
 	defaultQueueBytes = 64 * 1024
 )
 
-// LossyConn wraps a real UDPConn, intentionally lose/delay packet from the sending end.
+// LossyConn bọc 1 UDPConn thật, cố ý làm mất / trễ gói ở phía gửi để test và đo đạc.
 //
 //   - Loss:   bỏ ngẫu nhiên (mất gói không liên quan tới nghẽn, vd sóng Wi-Fi yếu).
 //   - Delay/Jitter: độ trễ đường truyền. Giả lập hàng đợi FIFO của router: độ trễ mỗi gói thay đổi nhưng gói sau
@@ -57,14 +58,14 @@ type delayedPkt struct {
 // ở nút cổ chai (Rate/QueueBytes).
 func (l *LossyConn) WriteToUDP(b []byte, addr *net.UDPAddr) (int, error) {
 	if rand.Float64() < l.Loss {
-		return len(b), nil // lose package, pretend to finish sending
+		return len(b), nil // bỏ gói nhưng giả vờ đã gửi thành công
 	}
 
 	if l.Delay == 0 && l.Jitter == 0 && l.Rate == 0 {
 		return l.UDPConn.WriteToUDP(b, addr)
 	}
 
-	cp := append([]byte(nil), b...) // copy, caller can reuse b
+	cp := append([]byte(nil), b...) // copy: caller được phép dùng lại b
 	d := l.Delay
 
 	if l.Jitter > 0 {
@@ -72,7 +73,7 @@ func (l *LossyConn) WriteToUDP(b []byte, addr *net.UDPAddr) (int, error) {
 	}
 
 	if l.Reorder && l.Rate == 0 {
-		time.AfterFunc(d, func() { l.UDPConn.WriteToUDP(cp, addr) }) // err (closed socket) then skip
+		time.AfterFunc(d, func() { l.UDPConn.WriteToUDP(cp, addr) }) // lỗi (socket đã đóng) thì bỏ qua
 		return len(b), nil
 	}
 
@@ -142,7 +143,7 @@ func (l *LossyConn) start() {
 				}
 			}
 
-			l.UDPConn.WriteToUDP(p.b, p.addr) // err (closed socket) then skip
+			l.UDPConn.WriteToUDP(p.b, p.addr) // lỗi (socket đã đóng) thì bỏ qua
 		}
 	}()
 }

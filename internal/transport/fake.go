@@ -5,7 +5,7 @@ import (
 	"sync"
 )
 
-// FakeEndpoint: transport giả, nối 2 đầu bằng channel trong CÙNG process. Không mất gói, không mã hóa.
+// FakeEndpoint là transport giả, nối 2 đầu bằng channel trong CÙNG process. Không mất gói, không mã hóa.
 type FakeEndpoint struct {
 	peer      *FakeEndpoint
 	recvCh    chan Delivery
@@ -15,6 +15,7 @@ type FakeEndpoint struct {
 	nextStrm  uint32
 }
 
+// fakeStream là stream gửi của FakeEndpoint: mỗi Write giao ngay 1 Delivery cho đầu kia.
 type fakeStream struct {
 	ep *FakeEndpoint
 	id uint32

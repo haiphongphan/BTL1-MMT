@@ -7,6 +7,11 @@ import (
 	"io"
 )
 
+// maxMsgSize: message handshake tối đa 1 MB. Độ dài do bên kia tự khai, không giới hạn thì kẻ xấu
+// gửi độ dài 4 GB là làm server cấp phát hết RAM (OOM).
+const maxMsgSize = 1 << 20
+
+// ErrMessageTooLarge: độ dài message handshake vượt maxMsgSize.
 var ErrMessageTooLarge = errors.New("protocol: message vượt quá giới hạn 1MB")
 
 // WriteMsg ghi 1 message handshake TCP: [4 byte độ dài big-endian][JSON].
@@ -31,7 +36,7 @@ func ReadMsg(r io.Reader, v any) error {
 		return err
 	}
 	n := binary.BigEndian.Uint32(hdr[:])
-	if n > 1<<20 { // Giới hạn 1 MB chống OOM
+	if n > maxMsgSize {
 		return ErrMessageTooLarge
 	}
 	b := make([]byte, n)

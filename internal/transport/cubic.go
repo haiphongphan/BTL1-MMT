@@ -25,12 +25,14 @@ const (
 	cubicMaxCwnd  = float64(recvBufMax) // trần: không bao giờ gửi quá cửa sổ nhận 1 MB, tăng thêm là vô nghĩa
 )
 
+// cubic cài đặt congestionController theo thuật toán CUBIC ở trên. Chỉ goroutine run() dùng.
 type cubic struct {
 	cwnd, ssthresh, wMax float64   // byte
 	wEst                 float64   // byte, ước lượng Reno trong chu kỳ hiện tại
 	epoch                time.Time // bắt đầu chu kỳ bậc 3 hiện tại; zero = chưa bắt đầu
 }
 
+// newCubic bắt đầu ở slow start với cwnd = 10 gói, ssthresh = ∞.
 func newCubic() *cubic {
 	return &cubic{cwnd: cubicInitCwnd, ssthresh: math.Inf(1)}
 }

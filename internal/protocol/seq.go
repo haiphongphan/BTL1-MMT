@@ -47,7 +47,7 @@ func (b *SeqBuffer) Push(m AppMsg) []AppMsg {
 	return b.drain(out)
 }
 
-// drain giao tiếp các tin liền mạch đang chờ.
+// drain nối thêm vào out các tin đang chờ có Seq liền sau next (next, next+1, ...).
 func (b *SeqBuffer) drain(out []AppMsg) []AppMsg {
 	for {
 		m, ok := b.pending[b.next]
@@ -60,7 +60,7 @@ func (b *SeqBuffer) drain(out []AppMsg) []AppMsg {
 	}
 }
 
-// skipGap bỏ qua chỗ trống: nhảy tới Seq nhỏ nhất đang chờ.
+// skipGap bỏ qua chỗ trống: nhảy tới Seq nhỏ nhất đang chờ rồi giao các tin liền mạch từ đó.
 func (b *SeqBuffer) skipGap() []AppMsg {
 	keys := make([]uint64, 0, len(b.pending))
 	for k := range b.pending {
@@ -71,5 +71,5 @@ func (b *SeqBuffer) skipGap() []AppMsg {
 	return b.drain(nil)
 }
 
-// Pending: số tin đang giữ chờ.
+// Pending trả về số tin đang giữ chờ lấp chỗ trống.
 func (b *SeqBuffer) Pending() int { return len(b.pending) }

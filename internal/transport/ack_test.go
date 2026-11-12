@@ -8,7 +8,7 @@ import (
 )
 
 func TestAckTrackerRanges(t *testing.T) {
-	tr := newAcKTracker()
+	tr := newAckTracker()
 	for _, pn := range []uint32{1, 2, 3, 4, 5, 7, 8, 9, 12} {
 		if !tr.add(pn) {
 			t.Fatalf("add(%d) lần đầu phải trả true", pn)
@@ -22,7 +22,7 @@ func TestAckTrackerRanges(t *testing.T) {
 }
 
 func TestAckTrackerDuplicate(t *testing.T) {
-	tr := newAcKTracker()
+	tr := newAckTracker()
 	tr.add(5)
 	if tr.add(5) {
 		t.Fatal("gói trùng phải trả false")
@@ -30,7 +30,7 @@ func TestAckTrackerDuplicate(t *testing.T) {
 }
 
 func TestAckTrackerEmptyAndZero(t *testing.T) {
-	tr := newAcKTracker()
+	tr := newAckTracker()
 	if tr.ranges(8) != nil {
 		t.Fatal("chưa nhận gì thì không có range")
 	}
@@ -41,7 +41,7 @@ func TestAckTrackerEmptyAndZero(t *testing.T) {
 }
 
 func TestAckTrackerMaxRanges(t *testing.T) {
-	tr := newAcKTracker()
+	tr := newAckTracker()
 	for pn := uint32(0); pn <= 20; pn += 2 { // 0, 2, 4, ..., 20: 11 range rời nhau
 		tr.add(pn)
 	}
@@ -53,7 +53,7 @@ func TestAckTrackerMaxRanges(t *testing.T) {
 }
 
 func TestAckTrackerHistoryLimit(t *testing.T) {
-	tr := newAcKTracker()
+	tr := newAckTracker()
 	tr.add(1)
 	for pn := uint32(10000); pn <= 10010; pn++ {
 		tr.add(pn)
@@ -66,7 +66,7 @@ func TestAckTrackerHistoryLimit(t *testing.T) {
 }
 
 func TestAckTrackerPrune(t *testing.T) {
-	tr := newAcKTracker()
+	tr := newAckTracker()
 	for pn := uint32(0); pn < 3*ackHistory; pn++ {
 		tr.add(pn)
 	}

@@ -13,11 +13,16 @@ const (
 	maxAckDelay = tickInterval
 )
 
+// rttEstimator ước lượng RTT từ các mẫu đo (thời gian từ lúc gửi gói tới lúc nhận ACK của nó) theo RFC 6298.
 type rttEstimator struct {
 	srtt, rttvar time.Duration
 	latest       time.Duration // mẫu RTT gần nhất, dùng cho ngưỡng mất theo thời gian
 }
 
+// update thêm 1 mẫu RTT. Mẫu đầu tiên: SRTT = mẫu, RTTVAR = mẫu/2; sau đó trung bình trượt:
+//
+//	RTTVAR = 3/4·RTTVAR + 1/4·|SRTT − mẫu|
+//	SRTT   = 7/8·SRTT   + 1/8·mẫu
 func (r *rttEstimator) update(sample time.Duration) {
 	r.latest = sample
 	if r.srtt == 0 {
@@ -30,11 +35,11 @@ func (r *rttEstimator) update(sample time.Duration) {
 		diff = -diff
 	}
 
-	r.rttvar = (3*r.rttvar + diff) / 4 // β = 1/4
+	r.rttvar = (3*r.rttvar + diff) / 4 // β = 1/4 (cập nhật RTTVAR trước, dùng SRTT cũ, đúng như RFC)
 	r.srtt = (7*r.srtt + sample) / 8   // α = 1/8
 }
 
-// rto: SRTT/RTTVAR theo RFC 6298, nhưng thay "tối thiểu 1 s" của TCP bằng công thức PTO của QUIC (RFC 9002 mục 6.2):
+// rto tính thời gian chờ ACK tối đa trước khi coi gói là mất. SRTT/RTTVAR theo RFC 6298, nhưng thay "tối thiểu 1 s" của TCP bằng công thức PTO của QUIC (RFC 9002 mục 6.2):
 //
 //	RTO = SRTT + max(4·RTTVAR, granularity) + maxAckDelay
 //
@@ -48,7 +53,7 @@ func (r *rttEstimator) rto() time.Duration {
 	return r.srtt + max(4*r.rttvar, granularity) + maxAckDelay
 }
 
-// lossDelay: gói đã bị 1 gói gửi SAU nó "vượt mặt" (được ACK) mà vẫn chưa được ACK sau 9/8 RTT thì coi là mất
+// lossDelay trả về ngưỡng mất theo thời gian: gói đã bị 1 gói gửi SAU nó "vượt mặt" (được ACK) mà vẫn chưa được ACK sau 9/8 RTT thì coi là mất
 // (RFC 9002 mục 6.1.2). Hệ số 9/8 chừa chỗ cho dao động RTT nhỏ.
 func (r *rttEstimator) lossDelay() time.Duration {
 	return max(9*max(r.srtt, r.latest)/8, granularity)
