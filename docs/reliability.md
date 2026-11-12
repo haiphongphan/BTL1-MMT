@@ -30,7 +30,7 @@ PHÍA NHẬN
    ├─ AckFrame    → onAck: xóa khỏi unacked, đo RTT, cc.OnAck, detectLoss
    └─ StreamFrame → recvStream.push (ghép theo offset) → outQ → app.Recv()
 
-ĐỒNG HỒ 10 ms: detectLoss · keepAlive (PING 2 s / timeout 10 s) · publishStats · cclog
+ĐỒNG HỒ 10 ms (100 ms khi không có gói chờ ACK): detectLoss · keepAlive (PING 2 s / timeout 10 s) · publishStats · cclog
 ```
 
 `packet_num` đánh số **gói** (tăng mãi, kể cả khi gửi lại) dùng cho ACK và đo RTT; `offset` đánh số **byte trong stream** (cố định) dùng để ghép. Frame của gói #41 bị mất được đóng vào gói **#57** với offset giữ nguyên ⇒ đo RTT không bao giờ mập mờ (không cần thuật toán Karn như TCP).
