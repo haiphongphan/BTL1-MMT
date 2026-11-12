@@ -56,6 +56,9 @@ func main() {
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-quit
+		if *stats > 0 {
+			printStats(srv)
+		}
 		log.Printf("[Server] Đang tắt...")
 		srv.Close()
 		os.Exit(0)
@@ -77,9 +80,13 @@ func localIP() string {
 
 // logStats in số goroutine, RAM heap và số user online mỗi chu kỳ (dùng khi test tải: số goroutine không được tăng mãi).
 func logStats(srv *server.Server, every time.Duration) {
-	var m runtime.MemStats
 	for range time.Tick(every) {
-		runtime.ReadMemStats(&m)
-		log.Printf("[stats] goroutines=%d heap=%.1fMB online=%d", runtime.NumGoroutine(), float64(m.HeapAlloc)/(1<<20), srv.OnlineCount())
+		printStats(srv)
 	}
+}
+
+func printStats(srv *server.Server) {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	log.Printf("[stats] goroutines=%d heap=%.1fMB online=%d", runtime.NumGoroutine(), float64(m.HeapAlloc)/(1<<20), srv.OnlineCount())
 }

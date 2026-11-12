@@ -50,7 +50,7 @@ func main() {
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-quit
-		c.Close()
+		c.Close() // CLOSE là best-effort: nếu mất (vd -loss, -jitter) server vẫn phát hiện sau 10 s im lặng
 		os.Exit(0)
 	}()
 

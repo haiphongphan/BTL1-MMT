@@ -253,6 +253,9 @@ func TestClientKilled(t *testing.T) {
 	if testing.Short() {
 		t.Skip("cần build binary, > 10s")
 	}
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows không gửi được SIGINT cho tiến trình khác")
+	}
 	bin := filepath.Join(t.TempDir(), "client")
 	if runtime.GOOS == "windows" {
 		bin += ".exe"
