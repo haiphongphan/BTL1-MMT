@@ -85,7 +85,19 @@ func (m *Mux) Accept(connID uint32, key [32]byte) (*Conn, error) {
 	return c, nil
 }
 
+// Close đóng mọi Conn (gửi CLOSE để bên kia biết ngay, không phải đợi 10s idle timeout) rồi mới đóng socket.
 func (m *Mux) Close() error {
+	// copy danh sách rồi thả lock: Conn.Close() đợi run() thoát, còn goroutine dọn dẹp trong Accept cũng cần m.mu
+	m.mu.RLock()
+	conns := make([]*Conn, 0, len(m.conns))
+	for _, c := range m.conns {
+		conns = append(conns, c)
+	}
+	m.mu.RUnlock()
+
+	for _, c := range conns {
+		c.Close()
+	}
 	return m.sock.Close()
 }
 

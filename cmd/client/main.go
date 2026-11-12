@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/phongphanhai06/go-collab/internal/client"
+	"github.com/phongphanhai06/go-collab/internal/transport"
 	"github.com/phongphanhai06/go-collab/internal/webui"
 )
 
@@ -17,9 +18,22 @@ func main() {
 	serverAddr := flag.String("server", "127.0.0.1:9000", "Server TCP Address")
 	username := flag.String("user", "phong", "Username")
 	password := flag.String("pass", "123456", "Password")
+	ccLogPath := flag.String("cclog", "", "Ghi diễn biến cwnd ra file CSV (vẽ đồ thị: go run ./scripts/plotcc file.csv > cwnd.svg)")
+	ccName := flag.String("cc", "cubic", "Congestion control: cubic | fixed (cửa sổ cố định 64 KB)")
 	loss := flag.Float64("loss", 0, "Tỉ lệ mất gói giả lập khi gửi (0.1 = 10%)")
 	web := flag.String("web", "127.0.0.1:8081", "Địa chỉ Web UI local (rỗng = tắt)")
 	flag.Parse()
+
+	if err := transport.SetCongestionControl(*ccName); err != nil {
+		log.Fatal(err)
+	}
+	if *ccLogPath != "" {
+		closeLog, err := transport.EnableCCLog(*ccLogPath)
+		if err != nil {
+			log.Fatalf("Mở file cclog thất bại: %v", err)
+		}
+		defer closeLog()
+	}
 
 	c := client.NewClient(*username)
 	if err := c.Connect(*serverAddr, *password, *loss); err != nil {

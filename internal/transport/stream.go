@@ -127,6 +127,12 @@ func (c *Conn) enqueue(f *protocol.StreamFrame, urgent bool) error {
 	}
 
 	select {
+	case <-c.done: // kiểm tra trước: ch có buffer nên select dưới đây có thể chọn nhánh gửi dù conn đã đóng
+		return ErrClosed
+	default:
+	}
+
+	select {
 	case ch <- f:
 		return nil // avai -> enqueue
 	case <-c.done:

@@ -2,8 +2,10 @@ package transport
 
 import (
 	"crypto/cipher"
+	"fmt"
 	"log"
 	"net"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -21,6 +23,8 @@ const (
 	ackFrameMax     = 1 + 4 + 1 + maxAckRanges*8 // = 70 bytes each frame
 	streamFrameHdr  = 12
 	closedStreamTTL = 30 * time.Second
+	maxRTO          = 5 * time.Second // trần của RTO khi backoff
+	maxBackoffShift = 6               // 200ms << 6 = 12.8s > maxRTO, đủ để chạm trần và không tràn số
 
 	dirClientToServer byte = 0
 	dirServerToClient byte = 1
@@ -40,6 +44,27 @@ func (fixedWindow) Window() int {
 
 func (fixedWindow) OnAck(acked int, now time.Time) {}
 func (fixedWindow) OnLoss(now time.Time)           {}
+
+// ccAlgo: thuật toán congestion control cho các Conn tạo ra sau này ("cubic" mặc định, hoặc "fixed").
+var ccAlgo atomic.Value
+
+// SetCongestionControl chọn thuật toán congestion control: "cubic" (mặc định) hoặc "fixed" (cửa sổ cố định 64 KB).
+// "fixed" không giảm tốc khi mất gói -> nhanh hơn nhiều khi giả lập mất gói ngẫu nhiên (-loss), dùng để so sánh.
+func SetCongestionControl(name string) error {
+	switch name {
+	case "cubic", "fixed":
+		ccAlgo.Store(name)
+		return nil
+	}
+	return fmt.Errorf("transport: congestion control %q không hỗ trợ (cubic | fixed)", name)
+}
+
+func newCongestionController() congestionController {
+	if name, _ := ccAlgo.Load().(string); name == "fixed" {
+		return fixedWindow{}
+	}
+	return newCubic()
+}
 
 type inPacket struct {
 	raw  []byte
@@ -91,6 +116,10 @@ type Conn struct {
 	cc            congestionController
 	bytesInFlight int
 	peerWindow    int
+	winAckPN      uint32 // packet_num lớn nhất của ACK đã cập nhật peerWindow
+	haveWinAck    bool
+	rtoBackoff    int // số lần timeout liên tiếp; RTO hiệu dụng = rto << rtoBackoff
+	lastLogCwnd   int // cwnd lần ghi cclog gần nhất
 	recoveryStart time.Time
 	lastHeard     time.Time
 	lastSent      time.Time
@@ -123,7 +152,7 @@ func newConn(sock PacketConn, peer *net.UDPAddr, id uint32, key [32]byte, isServ
 		recvd:         newAcKTracker(),
 		streams:       map[uint32]*recvStream{},
 		closedStreams: map[uint32]time.Time{},
-		cc:            fixedWindow{},
+		cc:            newCongestionController(),
 		peerWindow:    recvBufMax, // pretend the other side has 1 MB until the first ack
 		lastAdvWindow: recvBufMax,
 		lastHeard:     now,
@@ -210,6 +239,7 @@ func (c *Conn) run() {
 			c.keepAlive(now)
 			c.cleanup(now)
 			c.publishStats()
+			c.logCC(now, "tick")
 
 		case <-c.closeReq:
 			c.sendClose("bye")
@@ -301,7 +331,13 @@ func (c *Conn) handlePacket(p inPacket, now time.Time) {
 }
 
 func (c *Conn) onAck(a *protocol.AckFrame, now time.Time) {
-	c.peerWindow = int(a.Window)
+	// ACK cũ đến muộn không được ghi đè cửa sổ mới hơn. Ranges[0].End = packet_num lớn nhất mà ACK này xác nhận.
+	if len(a.Ranges) == 0 || !c.haveWinAck || a.Ranges[0].End >= c.winAckPN {
+		c.peerWindow = int(a.Window)
+		if len(a.Ranges) > 0 {
+			c.winAckPN, c.haveWinAck = a.Ranges[0].End, true
+		}
+	}
 	var newest uint32
 	var newestPkt *sentPacket
 
@@ -317,6 +353,10 @@ func (c *Conn) onAck(a *protocol.AckFrame, now time.Time) {
 		if newestPkt == nil || pn > newest {
 			newest, newestPkt = pn, sp
 		}
+	}
+
+	if newestPkt != nil {
+		c.rtoBackoff = 0 // có ACK mới -> mạng còn sống -> RTO về bình thường
 	}
 
 	if newestPkt != nil && (!c.haveAcked || newest > c.largestAcked) {
@@ -381,16 +421,37 @@ func (c *Conn) maybeWindowUpdate() {
 
 /*========== Clock =========== */
 func (c *Conn) detectLoss(now time.Time) {
-	rto := c.rtt.rto()
+	rto := c.rto()
+	lossDelay := c.rtt.lossDelay()
+	var lost []uint32
+	timedOut := false
 
 	for pn, sp := range c.unacked {
-		byCount := c.haveAcked && pn+lossThreshold <= c.largestAcked
-		byTime := now.Sub(sp.sentAt) > rto
+		age := now.Sub(sp.sentAt)
+		overtaken := c.haveAcked && pn < c.largestAcked // đã có gói gửi sau nó được ACK
+		byCount := overtaken && pn+lossThreshold <= c.largestAcked
+		byDelay := overtaken && age > lossDelay // cwnd nhỏ (< 4 gói) thì không bao giờ đủ 3 gói vượt mặt
+		byTime := age > rto
 
-		if !byCount && !byTime {
+		if !byCount && !byDelay && !byTime {
 			continue
 		}
 
+		if !byCount && !byDelay {
+			timedOut = true // mất vì hết giờ (không có ACK nào "vượt mặt") -> dấu hiệu mạng chết
+		}
+		lost = append(lost, pn)
+	}
+
+	if len(lost) == 0 {
+		return
+	}
+
+	// map duyệt ngẫu nhiên -> sort để gửi lại theo đúng thứ tự gửi ban đầu (offset nhỏ tới trước)
+	slices.Sort(lost)
+
+	for _, pn := range lost {
+		sp := c.unacked[pn]
 		delete(c.unacked, pn)
 		c.bytesInFlight -= sp.size
 		c.lostPkts++
@@ -399,8 +460,19 @@ func (c *Conn) detectLoss(now time.Time) {
 		if sp.sentAt.After(c.recoveryStart) { // each "lost batch" decreases cwnd by 1
 			c.cc.OnLoss(now)
 			c.recoveryStart = now
+			c.logCC(now, "loss")
 		}
 	}
+
+	// nhiều gói hết giờ trong cùng 1 lượt chỉ tính là 1 lần timeout
+	if timedOut && c.rtoBackoff < maxBackoffShift {
+		c.rtoBackoff++
+	}
+}
+
+// rto: RTO theo RFC 6298, nhân đôi sau mỗi lần timeout liên tiếp (exponential backoff), tối đa maxRTO.
+func (c *Conn) rto() time.Duration {
+	return min(c.rtt.rto()<<c.rtoBackoff, maxRTO)
 }
 
 func (c *Conn) keepAlive(now time.Time) {

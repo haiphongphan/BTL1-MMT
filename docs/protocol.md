@@ -151,12 +151,15 @@ type FileMeta struct {
 
 ### 3.7 Tham số mặc định
 
-| Tham số | Giá trị |
-|---|---|
-| Heartbeat (PING khi rảnh) | 2s |
-| Idle timeout (coi như chết) | 10s |
-| Loss: ngưỡng số gói | gói bị "vượt mặt" bởi gói số ≥ pn+3 đã được ACK |
-| RTO ban đầu / tối thiểu | 500 ms / 200 ms |
-| Delayed ACK | tối đa 25 ms hoặc mỗi 2 gói |
-| Cửa sổ nhận | 1 MB |
-| cwnd ban đầu | 10 × 1200 byte |
+| Tham số | Giá trị | Ghi chú |
+|---|---|---|
+| Heartbeat (PING khi rảnh) | 2 s | |
+| Idle timeout (coi như chết) | 10 s | |
+| Mất gói theo số đếm | gói bị "vượt mặt" bởi gói số ≥ pn+3 đã được ACK | RFC 9002 kPacketThreshold |
+| Mất gói theo thời gian | gói đã bị vượt mặt và chưa được ACK sau 9/8 · max(SRTT, RTT mới nhất), tối thiểu 1 ms | RFC 9002 kTimeThreshold; cần khi cwnd < 4 gói (không bao giờ đủ 3 gói vượt mặt) |
+| RTO | ban đầu 500 ms; sau đó `SRTT + max(4·RTTVAR, 1 ms) + 10 ms` | Công thức PTO của QUIC (RFC 9002 §6.2). Không dùng sàn 200 ms của TCP vì bên nhận không trì hoãn ACK |
+| RTO backoff | timeout liên tiếp thì ×2, tối đa 5 s; có ACK mới thì về bình thường | Mất theo số đếm/thời gian (mạng còn sống) không tăng backoff |
+| ACK | gửi ngay trong lần flush kế tiếp (không trì hoãn); gom nhiều gói nhờ xử lý tối đa 32 gói đang chờ rồi mới flush | Gói chỉ chứa ACK thì không ACK lại |
+| Cửa sổ nhận | 1 MB | |
+| Congestion control | CUBIC (mặc định) hoặc cửa sổ cố định 64 KB (`-cc fixed`) | |
+| CUBIC | C = 0.4, β = 0.7, cwnd ban đầu 10 × 1200 byte, sàn 2 gói, trần 1 MB | RFC 9438, có vùng Reno-friendly |
