@@ -25,6 +25,10 @@ const (
 	closedStreamTTL = 30 * time.Second
 	maxRTO          = 5 * time.Second // trần của RTO khi backoff
 	maxBackoffShift = 6               // 200ms << 6 = 12.8s > maxRTO, đủ để chạm trần và không tràn số
+	// firstProbe: client gửi lại PING đầu tiên sau khoảng này (nhân đôi mỗi lần, tối đa pingInterval) cho tới khi nghe
+	// được server. Server chỉ biết địa chỉ UDP của client khi nhận được gói đầu tiên; nếu PING đầu bị mất mà phải đợi
+	// tới PING keep-alive (2 s) thì client mới kết nối bị "điếc" 2 s, 4 s... (giống QUIC gửi lại gói Initial).
+	firstProbe = 200 * time.Millisecond
 
 	dirClientToServer byte = 0
 	dirServerToClient byte = 1
@@ -123,6 +127,9 @@ type Conn struct {
 	recoveryStart time.Time
 	lastHeard     time.Time
 	lastSent      time.Time
+	heardPeer     bool // đã nhận được ít nhất 1 gói hợp lệ từ bên kia
+	probes        int  // số lần client đã gửi lại PING đầu tiên khi chưa nghe được server
+	isClient      bool
 	sentPkts      uint64
 	lostPkts      uint64
 	closed        bool
@@ -166,6 +173,7 @@ func newConn(sock PacketConn, peer *net.UDPAddr, id uint32, key [32]byte, isServ
 		c.sendDir, c.recvDir = dirClientToServer, dirServerToClient
 		c.nextStream.Store(^uint32(0)) // = -1 -> Add(2) for 1, 3, 5, ...
 		c.pingNeeded = true            // first pack for server to know client's UDP addr
+		c.isClient = true
 	}
 	c.publishStats()
 	go c.run()
@@ -301,6 +309,7 @@ func (c *Conn) handlePacket(p inPacket, now time.Time) {
 	}
 
 	c.lastHeard = now
+	c.heardPeer = true
 	isNew := c.recvd.add(h.PacketNum)
 
 	// only change addr if this is the newest packet -> bad guy sent packet from the old IP cannot steal connection
@@ -484,6 +493,12 @@ func (c *Conn) keepAlive(now time.Time) {
 
 	if now.Sub(c.lastSent) >= pingInterval {
 		c.pingNeeded = true
+	}
+
+	// client chưa nghe được server: PING đầu (hoặc ACK của nó) có thể đã mất ⇒ gửi lại sớm, không đợi 2 s
+	if c.isClient && !c.heardPeer && now.Sub(c.lastSent) >= min(firstProbe<<min(c.probes, 4), pingInterval) {
+		c.pingNeeded = true
+		c.probes++
 	}
 }
 
