@@ -13,18 +13,22 @@ import (
 )
 
 const (
-	tickInterval    = 10 * time.Millisecond
-	pingInterval    = 2 * time.Second  // ping every 2s when free
-	idleTimeout     = 10 * time.Second // quiet 10s -> terminate
-	recvBufMax      = 1 << 20          // max size for receiving window is 1MB
-	maxBulkQueue    = 256              // stop receiving new frame file
-	lossThreshold   = 3                // surpass by packet >= pn + 3 acked packet
-	maxAckRanges    = 8
-	ackFrameMax     = 1 + 4 + 1 + maxAckRanges*8 // = 70 bytes each frame
-	streamFrameHdr  = 12
-	closedStreamTTL = 30 * time.Second
-	maxRTO          = 5 * time.Second // trần của RTO khi backoff
-	maxBackoffShift = 6               // 200ms << 6 = 12.8s > maxRTO, đủ để chạm trần và không tràn số
+	tickInterval = 10 * time.Millisecond
+	// idleTickInterval: nhịp đồng hồ khi không có gói nào chờ ACK. Chỉ còn việc keep-alive (2 s) / idle timeout (10 s)
+	// nên không cần 10 ms; tick 10 ms cho mọi kết nối rảnh làm Go scheduler thức dậy liên tục (đo được: server với
+	// 20 client không làm gì tốn 43% CPU, gần như toàn bộ là futex/findRunnable).
+	idleTickInterval = 100 * time.Millisecond
+	pingInterval     = 2 * time.Second  // ping every 2s when free
+	idleTimeout      = 10 * time.Second // quiet 10s -> terminate
+	recvBufMax       = 1 << 20          // max size for receiving window is 1MB
+	maxBulkQueue     = 256              // stop receiving new frame file
+	lossThreshold    = 3                // surpass by packet >= pn + 3 acked packet
+	maxAckRanges     = 8
+	ackFrameMax      = 1 + 4 + 1 + maxAckRanges*8 // = 70 bytes each frame
+	streamFrameHdr   = 12
+	closedStreamTTL  = 30 * time.Second
+	maxRTO           = 5 * time.Second // trần của RTO khi backoff
+	maxBackoffShift  = 6               // 200ms << 6 = 12.8s > maxRTO, đủ để chạm trần và không tràn số
 	// firstProbe: client gửi lại PING đầu tiên sau khoảng này (nhân đôi mỗi lần, tối đa pingInterval) cho tới khi nghe
 	// được server. Server chỉ biết địa chỉ UDP của client khi nhận được gói đầu tiên; nếu PING đầu bị mất mà phải đợi
 	// tới PING keep-alive (2 s) thì client mới kết nối bị "điếc" 2 s, 4 s... (giống QUIC gửi lại gói Initial).
@@ -211,6 +215,7 @@ func (c *Conn) Close() error {
 func (c *Conn) run() {
 	ticker := time.NewTicker(tickInterval)
 	defer ticker.Stop()
+	fastTick := true
 
 	for !c.closed {
 		bulkCh := c.bulkCh
@@ -256,6 +261,16 @@ func (c *Conn) run() {
 
 		if !c.closed {
 			c.flush(time.Now()) // send the remaining + ACK where needed
+		}
+
+		// có gói chờ ACK (cần phát hiện mất kịp thời) hoặc client còn đang dò server ⇒ tick nhanh; rảnh ⇒ tick chậm
+		if busy := len(c.unacked) > 0 || (c.isClient && !c.heardPeer); busy != fastTick {
+			fastTick = busy
+			if busy {
+				ticker.Reset(tickInterval)
+			} else {
+				ticker.Reset(idleTickInterval)
+			}
 		}
 	}
 
