@@ -2,11 +2,17 @@ package server
 
 import (
 	"errors"
-	"github.com/phongphanhai06/go-collab/internal/transport"
 	"net"
 	"sync"
 	"time"
+
+	"github.com/phongphanhai06/go-collab/internal/protocol"
+	"github.com/phongphanhai06/go-collab/internal/transport"
 )
+
+// sendQueueMax: số tin tối đa chờ gửi cho 1 client. Đầy nghĩa là client quá chậm/treo: server ngắt kết nối
+// client đó (client tự kết nối lại) thay vì âm thầm bỏ tin.
+const sendQueueMax = 4096
 
 type Session struct {
 	Username string
@@ -15,7 +21,8 @@ type Session struct {
 	UDPAddr  *net.UDPAddr
 	LastSeen time.Time
 	EP       transport.Endpoint
-	sendCh   chan []byte
+	sendCh   chan protocol.AppMsg
+	kick     sync.Once
 }
 
 type Registry struct {
@@ -46,7 +53,7 @@ func (r *Registry) AddPending(username string, connID uint32, kUDP [32]byte) (*S
 		ConnID:   connID,
 		KUDP:     kUDP,
 		LastSeen: time.Now(),
-		sendCh:   make(chan []byte, 64),
+		sendCh:   make(chan protocol.AppMsg, sendQueueMax),
 	}
 	r.byName[username] = sess
 	r.byConnID[connID] = sess

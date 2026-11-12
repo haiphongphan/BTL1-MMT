@@ -17,11 +17,12 @@ import (
 //go:embed static
 var static embed.FS
 
-const maxHeaderLine = 8 << 10 
+const maxHeaderLine = 8 << 10
+
 type Request struct {
 	Method, Path, RawQuery string
 	Headers                map[string]string
-	Body                   io.Reader 
+	Body                   io.Reader
 	ContentLength          int64
 }
 
@@ -55,13 +56,13 @@ func (s *Server) ListenAndServe(addr string) error {
 
 func (s *Server) handleConn(conn net.Conn) {
 	defer conn.Close()
-	defer func() { 
+	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[webui] panic: %v", r)
 			writeResponse(conn, Response{500, "text/plain", []byte("internal error")})
 		}
 	}()
-	conn.SetDeadline(time.Now().Add(10 * time.Minute)) 
+	conn.SetDeadline(time.Now().Add(10 * time.Minute))
 
 	req, err := readRequest(bufio.NewReader(conn))
 	if err != nil {
@@ -72,7 +73,7 @@ func (s *Server) handleConn(conn net.Conn) {
 }
 
 func readRequest(r *bufio.Reader) (*Request, error) {
-	line, err := readLine(r) 
+	line, err := readLine(r)
 	if err != nil {
 		return nil, err
 	}
@@ -102,7 +103,7 @@ func readRequest(r *bufio.Reader) (*Request, error) {
 		}
 		req.ContentLength = n
 	}
-	req.Body = io.LimitReader(r, req.ContentLength) 
+	req.Body = io.LimitReader(r, req.ContentLength)
 	return req, nil
 }
 

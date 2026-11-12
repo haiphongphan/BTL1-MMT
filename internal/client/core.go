@@ -26,7 +26,15 @@ type Client struct {
 	state   string
 	addr    string // lưu lại để reconnect
 	pass    string
-	loss    float64
+	net     NetOptions
+	outSeq  uint64 // Seq của tin gửi gần nhất trên kết nối hiện tại
+}
+
+// NetOptions giả lập mạng xấu ở chiều GỬI của client (xem transport.LossyConn).
+type NetOptions struct {
+	Loss   float64       // tỉ lệ mất gói, 0.1 = 10%
+	Delay  time.Duration // độ trễ cố định thêm vào mỗi gói
+	Jitter time.Duration // độ trễ ngẫu nhiên thêm [0, Jitter), không đảo thứ tự gói
 }
 
 type Status struct {
@@ -99,16 +107,22 @@ func (c *Client) isClosing() bool {
 	return c.closing
 }
 
+// Connect đăng nhập (TCP) rồi mở kết nối UDP; loss > 0 để giả lập mất gói.
 func (c *Client) Connect(serverTCPAddr, password string, loss float64) error {
+	return c.ConnectWith(serverTCPAddr, password, NetOptions{Loss: loss})
+}
+
+// ConnectWith giống Connect nhưng nhận đủ tham số giả lập mạng.
+func (c *Client) ConnectWith(serverTCPAddr, password string, opt NetOptions) error {
 	c.mu.Lock()
-	c.addr, c.pass, c.loss = serverTCPAddr, password, loss
+	c.addr, c.pass, c.net = serverTCPAddr, password, opt
 	c.mu.Unlock()
 	return c.dial()
 }
 
 func (c *Client) dial() error {
 	c.mu.Lock()
-	addr, pass, loss := c.addr, c.pass, c.loss
+	addr, pass, opt := c.addr, c.pass, c.net
 	c.mu.Unlock()
 
 	keyx, kUDP, err := c.ConnectTCPAndAuth(addr, pass)
@@ -130,13 +144,17 @@ func (c *Client) dial() error {
 		return err
 	}
 	var pc transport.PacketConn = sock
-	if loss > 0 {
-		pc = &transport.LossyConn{UDPConn: sock, Loss: loss}
+	if opt.Loss > 0 || opt.Delay > 0 || opt.Jitter > 0 {
+		pc = &transport.LossyConn{UDPConn: sock, Loss: opt.Loss, Delay: opt.Delay, Jitter: opt.Jitter}
 	}
 	conn, err := transport.Dial(pc, srvUDP, keyx.ConnID, kUDP) // Dial tự gửi PING đầu tiên
 	if err != nil {
 		sock.Close()
 		return err
+	}
+	if c.isClosing() { // Close() được gọi trong lúc đang kết nối (vd Ctrl+C khi đang reconnect)
+		conn.Close()
+		return errors.New("client: đã đóng")
 	}
 	c.AttachEndpoint(conn)
 	c.setState("connected")
@@ -202,6 +220,7 @@ func (c *Client) ConnectTCPAndAuth(serverTCPAddr, password string) (*protocol.Ke
 func (c *Client) AttachEndpoint(ep transport.Endpoint) {
 	c.mu.Lock()
 	c.ep = ep
+	c.outSeq = 0 // kết nối mới ⇒ Seq bắt đầu lại từ 1 (server cũng tạo SeqBuffer mới)
 	c.mu.Unlock()
 	go c.listenLoop(ep)
 }
@@ -214,6 +233,7 @@ type inStream struct {
 
 func (c *Client) listenLoop(ep transport.Endpoint) {
 	streams := make(map[uint32]*inStream)
+	var order protocol.SeqBuffer // tin từ server giao theo đúng Seq
 	defer func() {
 		for _, st := range streams { // file nhận dở → xóa file chưa hoàn chỉnh
 			if st.file != nil {
@@ -244,7 +264,7 @@ func (c *Client) listenLoop(ep transport.Endpoint) {
 			case protocol.KindMessage:
 				st.buf = append(st.buf, d.Data...)
 				if d.Fin {
-					c.handleMessage(st.buf)
+					c.handleMessage(st.buf, &order)
 				}
 			case protocol.KindFile:
 				c.onFileData(st.file, d)
@@ -265,17 +285,18 @@ func (c *Client) listenLoop(ep transport.Endpoint) {
 	}
 }
 
-func (c *Client) handleMessage(data []byte) {
+func (c *Client) handleMessage(data []byte, order *protocol.SeqBuffer) {
 	var msg protocol.AppMsg
 	if err := json.Unmarshal(data[1:], &msg); err != nil {
 		return
 	}
-	if msg.Type == "users" {
-		c.setOnline(msg.Users)
+	for _, m := range order.Push(msg) {
+		if m.Type == "users" {
+			c.setOnline(m.Users)
+		}
+		c.Events.Add(m.Type, m)
 	}
-	c.Events.Add(msg.Type, msg)
 }
-
 
 func (c *Client) reconnectLoop() {
 	delay := time.Second
@@ -290,11 +311,14 @@ func (c *Client) reconnectLoop() {
 	}
 }
 
-
 var ErrNotConnected = errors.New("client: chưa có kết nối UDP")
 
 func (c *Client) send(m protocol.AppMsg) error {
-	ep := c.endpoint()
+	c.mu.Lock() // lấy ep và Seq cùng lúc: Seq phải thuộc đúng kết nối sẽ gửi nó
+	ep := c.ep
+	c.outSeq++
+	m.Seq = c.outSeq
+	c.mu.Unlock()
 	if ep == nil {
 		return ErrNotConnected
 	}

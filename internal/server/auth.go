@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"log"
 	"net"
 	"os"
@@ -57,6 +58,7 @@ func (s *Server) ListenUDP(loss float64) error {
 	if loss > 0 {
 		pc = &transport.LossyConn{UDPConn: sock, Loss: loss}
 	}
+	s.udpPort = sock.LocalAddr().(*net.UDPAddr).Port // -udp-port 0 → cổng do OS chọn (dùng trong test)
 	s.mux = transport.NewMux(pc)
 	log.Printf("[Server] UDP transport running on :%d (loss %.0f%%)", s.udpPort, loss*100)
 	return nil
@@ -67,16 +69,37 @@ func (s *Server) ListenTCP(addr string) error {
 	if err != nil {
 		return err
 	}
-	log.Printf("[Server] TCP Handshake server running on %s", addr)
+	return s.Serve(ln)
+}
 
+// Serve nhận kết nối handshake trên ln cho tới khi ln bị đóng.
+func (s *Server) Serve(ln net.Listener) error {
+	log.Printf("[Server] TCP Handshake server running on %s", ln.Addr())
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return err
+			}
 			log.Printf("[Server] Accept err: %v", err)
 			continue
 		}
 		go s.handleHandshake(conn) // Mỗi client 1 goroutine độc lập
 	}
+}
+
+// OnlineCount: số user đang đăng nhập.
+func (s *Server) OnlineCount() int { return len(s.reg.Names()) }
+
+// UDPPort: cổng UDP thật đang nghe (khác cấu hình khi cấu hình là 0).
+func (s *Server) UDPPort() int { return s.udpPort }
+
+// Close đóng socket UDP và mọi kết nối transport (dùng trong test).
+func (s *Server) Close() error {
+	if s.mux == nil {
+		return nil
+	}
+	return s.mux.Close()
 }
 
 func (s *Server) handleHandshake(c net.Conn) {

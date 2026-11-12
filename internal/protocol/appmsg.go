@@ -36,6 +36,9 @@ type AppMsg struct {
 	Text  string   `json:"text,omitempty"`
 	Users []string `json:"users,omitempty"`
 	TS    int64    `json:"ts"` // UnixMilli
+	// Seq: số thứ tự tăng dần của người gửi trên 1 kết nối (1, 2, 3...), người nhận dùng SeqBuffer để giao
+	// đúng thứ tự. Server đánh lại Seq riêng cho từng người nhận. 0 = không cần thứ tự.
+	Seq uint64 `json:"seq,omitempty"`
 }
 
 type FileMeta struct {

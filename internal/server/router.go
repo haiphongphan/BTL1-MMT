@@ -17,22 +17,34 @@ type inStream struct {
 	drop  bool
 }
 
-func (sess *Session) Send(b []byte) bool {
+// Send xếp 1 tin vào hàng đợi gửi của sess, không chặn (1 client chậm không làm chậm người gửi và các client khác).
+// Hàng đợi đầy ⇒ ngắt client đó thay vì bỏ tin: bỏ tin sẽ làm mất tin và để lại lỗ hổng Seq.
+func (sess *Session) Send(m protocol.AppMsg) bool {
 	select {
-	case sess.sendCh <- b:
+	case sess.sendCh <- m:
 		return true
-
 	default:
-		log.Printf("[Server] Hàng đợi của '%s' đầy, bỏ 1 tin", sess.Username)
+		sess.kick.Do(func() {
+			log.Printf("[Server] Hàng đợi của '%s' đầy (%d tin), ngắt kết nối client chậm", sess.Username, sendQueueMax)
+			go sess.EP.Close()
+		})
 		return false
 	}
 }
 
+// writeLoop: goroutine duy nhất gửi tin cho sess, đánh Seq tăng dần theo đúng thứ tự xếp hàng.
 func (sess *Session) writeLoop() {
+	var seq uint64
 	for {
 		select {
-		case b := <-sess.sendCh:
-			if err := sess.EP.SendMessage(b); err != nil {
+		case m := <-sess.sendCh:
+			seq++
+			m.Seq = seq
+			b, err := json.Marshal(m)
+			if err != nil {
+				continue
+			}
+			if err := sess.EP.SendMessage(append([]byte{protocol.KindMessage}, b...)); err != nil {
 				return
 			}
 		case <-sess.EP.Done():
@@ -55,6 +67,7 @@ func (s *Server) AttachEndpoint(connID uint32, ep transport.Endpoint) bool {
 
 func (s *Server) serveSession(sess *Session) {
 	streams := make(map[uint32]*inStream)
+	var order protocol.SeqBuffer // giao tin của sess theo đúng thứ tự gửi
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -85,7 +98,7 @@ func (s *Server) serveSession(sess *Session) {
 
 			switch st.kind {
 			case protocol.KindMessage:
-				s.onMessageData(sess, st, d)
+				s.onMessageData(sess, st, d, &order)
 			case protocol.KindFile:
 				s.onFileData(sess, st, d)
 			}
@@ -100,7 +113,7 @@ func (s *Server) serveSession(sess *Session) {
 	}
 }
 
-func (s *Server) onMessageData(sess *Session, st *inStream, d transport.Delivery) {
+func (s *Server) onMessageData(sess *Session, st *inStream, d transport.Delivery, order *protocol.SeqBuffer) {
 	if !st.drop {
 		st.buf = append(st.buf, d.Data...)
 		if len(st.buf) > maxMessageSize {
@@ -116,26 +129,20 @@ func (s *Server) onMessageData(sess *Session, st *inStream, d transport.Delivery
 		log.Printf("[Server] Invalid JSON from %s: %v", sess.Username, err)
 		return
 	}
-	msg.From = sess.Username // Ghi đè From để chống giả danh
-	s.routeMessage(sess, msg)
+	for _, m := range order.Push(msg) {
+		m.From = sess.Username // Ghi đè From để chống giả danh
+		s.routeMessage(sess, m)
+	}
 }
 
 func (s *Server) sendError(to *Session, text string) {
-	b, err := json.Marshal(protocol.AppMsg{Type: "error", Text: text, TS: time.Now().UnixMilli()})
-	if err == nil {
-		to.Send(append([]byte{protocol.KindMessage}, b...))
-	}
+	to.Send(protocol.AppMsg{Type: "error", Text: text, TS: time.Now().UnixMilli()})
 }
 
 func (s *Server) routeMessage(from *Session, msg protocol.AppMsg) {
 	msg.TS = time.Now().UnixMilli()
-	payload, err := json.Marshal(msg)
-	if err != nil {
-		return
-	}
-
-	// Đóng gói thành message stream [0x01][JSON]
-	packet := append([]byte{protocol.KindMessage}, payload...)
+	msg.Seq = 0 // writeLoop của từng người nhận sẽ đánh Seq riêng
+	packet := msg
 
 	switch msg.Type {
 	case "chat": // Broadcast cho tất cả mọi người ngoại trừ người gửi
@@ -167,16 +174,11 @@ func (s *Server) dropSession(sess *Session) {
 
 func (s *Server) broadcastUserList() {
 	users := s.reg.Names()
-	msg := protocol.AppMsg{
+	packet := protocol.AppMsg{
 		Type:  "users",
 		Users: users,
 		TS:    time.Now().UnixMilli(),
 	}
-	payload, err := json.Marshal(msg)
-	if err != nil {
-		return
-	}
-	packet := append([]byte{protocol.KindMessage}, payload...)
 
 	// Snapshot danh sách để gửi không giữ lock
 	for _, sess := range s.reg.Snapshot() {
