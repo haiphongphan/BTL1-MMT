@@ -6,10 +6,12 @@ import (
 	"errors"
 )
 
-const maxFileMeta = 64 << 10 // meta JSON tối đa 64 KB
+const maxFileMeta = 64 << 10 // meta JSON tối đa 64 KB, chặn meta_len giả mạo làm cấp phát bộ nhớ vô hạn
 
+// ErrBadFileHeader: stream file không bắt đầu bằng KindFile, meta_len quá lớn hoặc JSON hỏng.
 var ErrBadFileHeader = errors.New("protocol: header file không hợp lệ")
 
+// EncodeFileHeader tạo phần đầu stream file: [0x02][meta_len uint32][JSON FileMeta].
 func EncodeFileHeader(m FileMeta) ([]byte, error) {
 	meta, err := json.Marshal(m)
 	if err != nil {
@@ -20,13 +22,17 @@ func EncodeFileHeader(m FileMeta) ([]byte, error) {
 	return append(b, meta...), nil
 }
 
+// FileHeaderParser đọc header của stream file khi dữ liệu tới từng mẩu: header có thể bị cắt ở bất kỳ đâu
+// giữa các Delivery nên phải gom lại cho tới khi đủ [0x02][meta_len][JSON]. Mỗi stream file dùng 1 parser.
 type FileHeaderParser struct {
-	buf []byte
+	buf []byte // phần đầu stream đã nhận nhưng chưa đủ để đọc header
 }
 
+// Feed nhận thêm dữ liệu đầu stream file. Khi đủ header thì trả về meta và phần dữ liệu file còn lại
+// trong b; chưa đủ thì meta = nil.
 func (p *FileHeaderParser) Feed(b []byte) (meta *FileMeta, rest []byte, err error) {
 	p.buf = append(p.buf, b...)
-	if len(p.buf) < 5 {
+	if len(p.buf) < 5 { // chưa đủ kind(1) + meta_len(4)
 		return nil, nil, nil
 	}
 	if p.buf[0] != KindFile {

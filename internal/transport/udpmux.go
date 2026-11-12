@@ -8,46 +8,49 @@ import (
 	"github.com/phongphanhai06/go-collab/internal/protocol"
 )
 
-// readLoop reads packet from sock, find Conn by conn_id, then push into Conn.in
-// Both server(Mux, many Conns) and client(Dial, 1 Conn) use this
+// readLoop đọc gói từ sock, tìm Conn theo conn_id trong header rồi đẩy vào Conn.in.
+// Dùng chung cho server (Mux, nhiều Conn trên 1 socket) và client (Dial, 1 Conn).
+// Ở đây chỉ kiểm tra header; giải mã/xác thực do Conn.run() làm.
 func readLoop(sock PacketConn, lookup func(connID uint32) *Conn) {
 	buf := make([]byte, 2048)
 	for {
 		n, addr, err := sock.ReadFromUDP(buf)
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) {
-				return // socket closed -> stop
+				return // socket đã đóng -> dừng
 			}
-			continue // temporary err (ICMP port unreachable...)
+			continue // lỗi tạm thời (vd ICMP port unreachable) -> đọc tiếp
 		}
 
 		h, err := protocol.ParseHeader(buf[:n])
 		if err != nil || h.Magic != protocol.Magic || h.Version != protocol.Version {
-			continue // trash packet
+			continue // gói rác, không phải giao thức này
 		}
 
 		c := lookup(h.ConnID)
 		if c == nil {
-			continue // conn_id not existed
+			continue // conn_id không tồn tại
 		}
 
-		raw := append([]byte(nil), buf[:n]...) // copy, buf will be overwritten
+		raw := append([]byte(nil), buf[:n]...) // copy: buf bị ghi đè ở lần đọc sau
 		select {
 		case c.in <- inPacket{raw: raw, addr: addr}:
-		default: // conn is overload -> drop packet (like real router), sender retrans
+		default: // Conn quá tải -> bỏ gói (như router thật); bên gửi sẽ phát hiện mất và gửi lại
 		}
 	}
 }
 
-//=========== Server ===========
+// ========== Server ==========
 
-// Mux: 1 socket UDP serves many Conn, demux by conn_id (not IP:port).
+// Mux cho 1 socket UDP phục vụ nhiều Conn, phân kênh theo conn_id (không theo IP:port, nên client
+// đổi mạng, ví dụ Wi-Fi sang 4G, vẫn giữ được kết nối).
 type Mux struct {
 	sock  PacketConn
 	mu    sync.RWMutex
 	conns map[uint32]*Conn
 }
 
+// NewMux tạo bộ phân kênh phía server trên 1 socket UDP: gói được chuyển tới Conn theo conn_id trong header.
 func NewMux(sock PacketConn) *Mux {
 	m := &Mux{
 		sock:  sock,
@@ -57,14 +60,15 @@ func NewMux(sock PacketConn) *Mux {
 	return m
 }
 
+// lookup tìm Conn theo conn_id; nil nếu không có.
 func (m *Mux) lookup(id uint32) *Conn {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.conns[id]
 }
 
-// Accept creates a Conn on server side after TCP handshake (conn_id and k_udp are known)
-// Client's UDP address is unknown; Conn learns it from the first packet (PING) the client sends.
+// Accept tạo Conn phía server sau khi handshake TCP xong (đã biết conn_id và k_udp).
+// Lúc này chưa biết địa chỉ UDP của client; Conn học được từ gói đầu tiên (PING) client gửi.
 func (m *Mux) Accept(connID uint32, key [32]byte) (*Conn, error) {
 	c, err := newConn(m.sock, nil, connID, key, true)
 	if err != nil {
@@ -74,7 +78,7 @@ func (m *Mux) Accept(connID uint32, key [32]byte) (*Conn, error) {
 	m.mu.Lock()
 	m.conns[connID] = c
 	m.mu.Unlock()
-	go func() { // conn dies -> remove from table
+	go func() { // Conn kết thúc -> xóa khỏi bảng
 		<-c.Done()
 		m.mu.Lock()
 		if m.conns[connID] == c {
@@ -85,15 +89,26 @@ func (m *Mux) Accept(connID uint32, key [32]byte) (*Conn, error) {
 	return c, nil
 }
 
+// Close đóng mọi Conn (gửi CLOSE để bên kia biết ngay, không phải đợi 10s idle timeout) rồi mới đóng socket.
 func (m *Mux) Close() error {
+	// copy danh sách rồi thả lock: Conn.Close() đợi run() thoát, còn goroutine dọn dẹp trong Accept cũng cần m.mu
+	m.mu.RLock()
+	conns := make([]*Conn, 0, len(m.conns))
+	for _, c := range m.conns {
+		conns = append(conns, c)
+	}
+	m.mu.RUnlock()
+
+	for _, c := range conns {
+		c.Close()
+	}
 	return m.sock.Close()
 }
 
-//========= Client =========
+// ========== Client ==========
 
-// Dial creates Conn on client side on client's private socket; Conn.run() sends the first PING.
-// sock is normally net.ListenUDP("udp", nil)
-// Conn closes -> sock closes
+// Dial tạo Conn phía client trên socket riêng của client; Conn.run() gửi PING đầu tiên ở tick đầu tiên.
+// sock thường là net.ListenUDP("udp", nil). Conn đóng thì sock cũng bị đóng.
 func Dial(sock PacketConn, server *net.UDPAddr, connID uint32, key [32]byte) (*Conn, error) {
 	c, err := newConn(sock, server, connID, key, false)
 	if err != nil {

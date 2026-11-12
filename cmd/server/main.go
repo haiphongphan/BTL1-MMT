@@ -9,16 +9,30 @@ import (
 	"time"
 
 	"github.com/phongphanhai06/go-collab/internal/server"
+	"github.com/phongphanhai06/go-collab/internal/transport"
 )
 
 func main() {
 	tcpAddr := flag.String("tcp", ":9000", "TCP Listen Address")
 	udpPort := flag.Int("udp-port", 9001, "UDP Transport Port")
 	usersFile := flag.String("users", "users.json", "Path to users.json file")
+	ccLogPath := flag.String("cclog", "", "Ghi diễn biến cwnd ra file CSV (vẽ đồ thị: go run ./scripts/plotcc file.csv > cwnd.svg)")
+	ccName := flag.String("cc", "cubic", "Congestion control: cubic | fixed (cửa sổ cố định 64 KB)")
 	loss := flag.Float64("loss", 0, "Tỉ lệ mất gói giả lập khi gửi (0.1 = 10%)")
 	jitter := flag.Duration("jitter", 0, "Trễ ngẫu nhiên giả lập khi gửi (vd 30ms)")
 
 	flag.Parse()
+
+	if err := transport.SetCongestionControl(*ccName); err != nil {
+		log.Fatal(err)
+	}
+	if *ccLogPath != "" {
+		closeLog, err := transport.EnableCCLog(*ccLogPath)
+		if err != nil {
+			log.Fatalf("Mở file cclog thất bại: %v", err)
+		}
+		defer closeLog()
+	}
 
 	srv, err := server.NewServer(*usersFile, *udpPort)
 	if err != nil {

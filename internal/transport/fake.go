@@ -5,7 +5,7 @@ import (
 	"sync"
 )
 
-// FakeEndpoint: transport giả, nối 2 đầu bằng channel trong CÙNG process. Không mất gói, không mã hóa.
+// FakeEndpoint là transport giả, nối 2 đầu bằng channel trong CÙNG process. Không mất gói, không mã hóa.
 type FakeEndpoint struct {
 	peer      *FakeEndpoint
 	recvCh    chan Delivery
@@ -15,11 +15,13 @@ type FakeEndpoint struct {
 	nextStrm  uint32
 }
 
+// fakeStream là stream gửi của FakeEndpoint: mỗi Write giao ngay 1 Delivery cho đầu kia.
 type fakeStream struct {
 	ep *FakeEndpoint
 	id uint32
 }
 
+// FakePair tạo 2 Endpoint nối thẳng với nhau trong bộ nhớ (không mất gói), dùng để test tầng app.
 func FakePair() (Endpoint, Endpoint) {
 	ep1 := &FakeEndpoint{recvCh: make(chan Delivery, 128), doneCh: make(chan struct{}), nextStrm: 1}
 	ep2 := &FakeEndpoint{recvCh: make(chan Delivery, 128), doneCh: make(chan struct{}), nextStrm: 2}
@@ -42,6 +44,7 @@ func (e *FakeEndpoint) deliver(d Delivery) error {
 	}
 }
 
+// Write giao dữ liệu ngay cho đầu bên kia.
 func (s *fakeStream) Write(p []byte) (int, error) {
 	cp := append([]byte(nil), p...) // copy: caller được phép dùng lại p
 	if err := s.ep.deliver(Delivery{StreamID: s.id, Data: cp}); err != nil {
@@ -50,10 +53,12 @@ func (s *fakeStream) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// Close gửi FIN.
 func (s *fakeStream) Close() error {
 	return s.ep.deliver(Delivery{StreamID: s.id, Fin: true})
 }
 
+// SendMessage giao b như 1 stream hoàn chỉnh (có FIN).
 func (e *FakeEndpoint) SendMessage(b []byte) error {
 	strm := e.OpenStream(true)
 	if _, err := strm.Write(b); err != nil {
@@ -62,6 +67,7 @@ func (e *FakeEndpoint) SendMessage(b []byte) error {
 	return strm.Close()
 }
 
+// OpenStream mở stream mới.
 func (e *FakeEndpoint) OpenStream(urgent bool) io.WriteCloser {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -70,9 +76,14 @@ func (e *FakeEndpoint) OpenStream(urgent bool) io.WriteCloser {
 	return &fakeStream{ep: e, id: id}
 }
 
+// Recv trả về channel dữ liệu nhận.
 func (e *FakeEndpoint) Recv() <-chan Delivery { return e.recvCh }
+
+// Done đóng khi endpoint bị đóng.
 func (e *FakeEndpoint) Done() <-chan struct{} { return e.doneCh }
-func (e *FakeEndpoint) Stats() Stats          { return Stats{State: "fake"} }
+
+// Stats trả về số liệu rỗng.
+func (e *FakeEndpoint) Stats() Stats { return Stats{State: "fake"} }
 
 // Close đóng CẢ 2 đầu, giống mất kết nối thật → đầu kia thấy Done().
 func (e *FakeEndpoint) Close() error {

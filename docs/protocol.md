@@ -134,6 +134,7 @@ type AppMsg struct {
 	Text  string   `json:"text,omitempty"`
 	Users []string `json:"users,omitempty"`
 	TS    int64    `json:"ts"`              // UnixMilli
+	Seq   uint64   `json:"seq,omitempty"`   // số thứ tự theo kết nối, xem dưới
 }
 
 type FileMeta struct {
@@ -146,17 +147,33 @@ type FileMeta struct {
 }
 ```
 
+**Thứ tự tin nhắn (`Seq`).** Mỗi tin là 1 stream riêng nên tin nào nhận đủ trước thì được giao trước. Khi mất gói,
+tin #2 có thể tới trước tin #1. Để giữ đúng thứ tự mà vẫn không HoL ở tầng transport:
+
+- Mỗi bên gửi đánh `Seq` = 1, 2, 3... cho từng **kết nối** (client → server; server đánh riêng cho từng người nhận,
+  trong goroutine `writeLoop` duy nhất của người nhận đó). Kết nối lại thì đếm lại từ 1.
+- Bên nhận dùng `protocol.SeqBuffer`: tin tới sớm được giữ lại cho tới khi các tin trước tới đủ; tin trùng bị bỏ;
+  `Seq = 0` được giao ngay. Giữ quá 4096 tin (chỉ xảy ra khi có lỗi) thì bỏ qua chỗ trống để không treo.
+- Chỉ áp dụng cho stream MESSAGE. File không cần: mỗi file là 1 stream, transport đã giao đúng thứ tự theo offset.
+- Server **không bỏ tin** khi hàng đợi gửi của 1 người nhận đầy (bỏ tin sẽ để lại lỗ hổng `Seq`): hàng đợi chứa
+  4096 tin, đầy thì ngắt client quá chậm đó (client tự kết nối lại).
+
 ### 3.6 State diagram của client (B vẽ, đưa vào báo cáo)
 
 
 ### 3.7 Tham số mặc định
 
-| Tham số | Giá trị |
-|---|---|
-| Heartbeat (PING khi rảnh) | 2s |
-| Idle timeout (coi như chết) | 10s |
-| Loss: ngưỡng số gói | gói bị "vượt mặt" bởi gói số ≥ pn+3 đã được ACK |
-| RTO ban đầu / tối thiểu | 500 ms / 200 ms |
-| Delayed ACK | tối đa 25 ms hoặc mỗi 2 gói |
-| Cửa sổ nhận | 1 MB |
-| cwnd ban đầu | 10 × 1200 byte |
+| Tham số | Giá trị | Ghi chú |
+|---|---|---|
+| Đồng hồ nội bộ mỗi kết nối | 10 ms khi có gói chờ ACK, 100 ms khi rảnh | Tick 10 ms cho kết nối rảnh tốn CPU vô ích (20 client rảnh: 43% CPU → vài %) |
+| Heartbeat (PING khi rảnh) | 2 s | |
+| PING đầu sau `Dial` | gửi lại sau 200 ms, 400 ms, 800 ms... (tối đa 2 s) cho tới khi nhận được gói đầu tiên từ server | Server chỉ biết địa chỉ UDP của client khi nhận được gói đầu tiên |
+| Idle timeout (coi như chết) | 10 s | |
+| Mất gói theo số đếm | gói bị "vượt mặt" bởi gói số ≥ pn+3 đã được ACK | RFC 9002 kPacketThreshold |
+| Mất gói theo thời gian | gói đã bị vượt mặt và chưa được ACK sau 9/8 · max(SRTT, RTT mới nhất), tối thiểu 1 ms | RFC 9002 kTimeThreshold; cần khi cwnd < 4 gói (không bao giờ đủ 3 gói vượt mặt) |
+| RTO | ban đầu 500 ms; sau đó `SRTT + max(4·RTTVAR, 1 ms) + 10 ms` | Công thức PTO của QUIC (RFC 9002 §6.2). Không dùng sàn 200 ms của TCP vì bên nhận không trì hoãn ACK |
+| RTO backoff | timeout liên tiếp thì ×2, tối đa 5 s; có ACK mới thì về bình thường | Mất theo số đếm/thời gian (mạng còn sống) không tăng backoff |
+| ACK | gửi ngay trong lần flush kế tiếp (không trì hoãn); gom nhiều gói nhờ xử lý tối đa 32 gói đang chờ rồi mới flush | Gói chỉ chứa ACK thì không ACK lại |
+| Cửa sổ nhận | 1 MB | |
+| Congestion control | CUBIC (mặc định) hoặc cửa sổ cố định 64 KB (`-cc fixed`) | |
+| CUBIC | C = 0.4, β = 0.7, cwnd ban đầu 10 × 1200 byte, sàn 2 gói, trần 1 MB | RFC 9438, có vùng Reno-friendly |
