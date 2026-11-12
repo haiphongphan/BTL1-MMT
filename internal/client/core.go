@@ -18,7 +18,7 @@ type Client struct {
 	User        string
 	Events      *EventLog
 	DownloadDir string
-	Jitter time.Duration
+	Jitter      time.Duration
 
 	mu      sync.Mutex // bảo vệ mọi field bên dưới
 	online  []string

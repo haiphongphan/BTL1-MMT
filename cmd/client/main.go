@@ -5,10 +5,10 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math/rand/v2"
 	"os"
 	"strings"
 	"time"
-	"math/rand/v2"
 
 	"github.com/phongphanhai06/go-collab/internal/client"
 	"github.com/phongphanhai06/go-collab/internal/transport"
@@ -137,6 +137,5 @@ func main() {
 		fmt.Println("CLI đóng, Web UI/bot vẫn chạy. Ctrl+C để thoát.")
 		select {}
 	}
-
 
 }
