@@ -1,10 +1,12 @@
 \section{Truyền tin cậy trên UDP}
 \label{sec:tin-cay}
 
-UDP chỉ ``cố gắng gửi'': gói có thể mất, đến sai thứ tự, bị lặp, và bên gửi không biết mạng còn chịu được bao
-nhiêu. Tầng \fname{internal/transport} biến UDP thành một kênh \textbf{tin cậy, đúng thứ tự trong từng stream,
-mã hóa, không HoL và tự điều tốc}. Thiết kế dựa trên QUIC \cite{rfc9000,rfc9002}, được đơn giản hóa cho
-phạm vi bài tập.
+UDP chỉ ``cố gắng gửi'' (\emph{best effort}): gói có thể bị mất, tới sai thứ tự hoặc bị lặp, và bên gửi cũng
+không biết mạng còn chịu được bao nhiêu dữ liệu. Chương này trình bày cách tầng \fname{internal/transport} của
+nhóm biến UDP thành một kênh truyền \textbf{tin cậy, đúng thứ tự trong từng stream, có mã hóa, không bị HoL và tự
+điều chỉnh tốc độ}. Nhóm thiết kế dựa theo QUIC \cite{rfc9000,rfc9002} nhưng lược bớt cho vừa phạm vi bài tập
+lớn. \Cref{tab:van-de-udp} tóm tắt các vấn đề của UDP và cơ chế nhóm dùng để giải quyết, các mục sau sẽ đi vào
+chi tiết từng cơ chế.
 
 \begin{table}[H]
   \centering
@@ -49,11 +51,15 @@ type Delivery struct {
 }
 \end{lstlisting}
 
-Tầng ứng dụng nhận các \fname{Delivery}: các đoạn của cùng một stream luôn đúng thứ tự, còn đoạn của các
-stream khác nhau có thể xen kẽ (stream nào đủ dữ liệu trước thì giao trước). Gửi file chỉ là
-\fname{io.Copy(ep.OpenStream(false), file)}. Ngoài bản UDP thật (\fname{*Conn}) còn có
-\fname{FakeEndpoint} nối hai đầu trong bộ nhớ, để tầng ứng dụng được viết và test song song khi transport chưa
-xong. \fname{Stats()} cung cấp số liệu mạng (RTT, cwnd, số gói mất) cho giao diện hiển thị trạng thái mạng.
+\Cref{lst:endpoint} là interface mà tầng transport cung cấp cho tầng ứng dụng. Dữ liệu nhận được trả về dưới
+dạng các \fname{Delivery}. Các đoạn thuộc cùng một stream luôn đúng thứ tự, còn các đoạn của những stream khác
+nhau thì có thể xen kẽ nhau, stream nào đủ dữ liệu trước thì được giao trước. Với interface này, việc gửi một
+file chỉ cần một dòng \fname{io.Copy(ep.OpenStream(false), file)}.
+
+Ngoài bản chạy trên UDP thật (\fname{*Conn}), nhóm viết thêm \fname{FakeEndpoint} nối hai đầu ngay trong bộ
+nhớ. Nhờ có bản giả này, phần tầng ứng dụng có thể được viết và test song song trong lúc tầng transport chưa làm
+xong. Hàm \fname{Stats()} trả về các số liệu mạng như RTT, cwnd, số gói mất để giao diện hiển thị trạng thái kết
+nối.
 
 \subsection{Mô hình concurrency}
 \label{subsec:concurrency}
@@ -84,74 +90,91 @@ xong. \fname{Stats()} cung cấp số liệu mạng (RTT, cwnd, số gói mất)
   \label{fig:concurrency}
 \end{figure}
 
-Mỗi kết nối (\fname{Conn}) có \textbf{đúng một goroutine} \fname{run()} sở hữu toàn bộ state: các gói chưa
-được ACK, các hàng đợi gửi, cwnd, ước lượng RTT, các stream đang nhận. Goroutine khác (ứng dụng gọi
-\fname{Write}, \fname{readLoop} đẩy gói vào) chỉ giao tiếp với nó qua channel. \fname{run()} là một vòng
-\fname{select} trên các nguồn sự kiện: gói tới, frame mới từ ứng dụng, ứng dụng sẵn sàng nhận dữ liệu, nhịp đồng
-hồ, yêu cầu đóng. Sau mỗi sự kiện nó gọi \fname{flush()} để gửi những gì được phép gửi.
+Một vấn đề nhóm phải tính tới sớm là nhiều goroutine cùng truy cập state của một kết nối: ứng dụng gọi
+\fname{Write} để gửi, trong khi \fname{readLoop} đẩy gói nhận được vào. Nếu dùng mutex để bảo vệ thì rất dễ quên
+khóa hoặc bị deadlock. Vì vậy nhóm chọn cách cho mỗi kết nối (\fname{Conn}) có \textbf{đúng một goroutine}
+\fname{run()} giữ toàn bộ state, bao gồm: các gói chưa được ACK, các hàng đợi gửi, cwnd, giá trị ước lượng RTT
+và các stream đang nhận. Các goroutine khác chỉ được giao tiếp với nó qua channel (\cref{fig:concurrency}).
 
-Nhờ vậy phần phức tạp nhất (reliability, congestion control) \textbf{không cần mutex} và không thể có data race;
-\fname{go test -race} xác nhận điều này. Phía server, một socket UDP dùng chung cho mọi client: \fname{Mux} có
-một goroutine \fname{readLoop} đọc socket, đọc \texttt{conn\_id} trong header (gửi rõ) và chuyển gói vào
-channel của đúng \fname{Conn}. 20 client nghĩa là 20 goroutine \fname{run()} độc lập, kết nối này chậm không
-làm chậm kết nối khác.
+Bên trong, \fname{run()} là một vòng lặp \fname{select} chờ các sự kiện: có gói tới, ứng dụng đưa frame mới
+xuống, ứng dụng sẵn sàng nhận thêm dữ liệu, tới nhịp đồng hồ, hoặc có yêu cầu đóng kết nối. Sau mỗi sự kiện,
+\fname{run()} gọi \fname{flush()} để gửi đi những gì đang được phép gửi.
 
-Nhịp đồng hồ dùng để phát hiện mất gói theo thời gian và gửi PING. Nó chạy 10 ms khi có gói đang chờ ACK, và
-100 ms khi rảnh (thử thách~\ref{tt:cpu} ở \cref{sec:thu-thach}).
+Nhờ thiết kế này, phần phức tạp nhất là truyền tin cậy và điều khiển tắc nghẽn \textbf{không cần dùng mutex} và
+không thể xảy ra data race. Nhóm đã kiểm tra lại bằng \fname{go test -race}.
+
+Phía server dùng chung một socket UDP cho tất cả client. \fname{Mux} có một goroutine \fname{readLoop} đọc
+socket, xem \texttt{conn\_id} trong header (phần này không mã hóa) và chuyển gói vào channel của đúng
+\fname{Conn}. Như vậy 20 client sẽ có 20 goroutine \fname{run()} chạy độc lập, kết nối này chậm cũng không làm
+chậm các kết nối khác.
+
+Nhịp đồng hồ dùng để phát hiện mất gói theo thời gian và để gửi PING. Khi có gói đang chờ ACK, đồng hồ chạy mỗi
+10 ms; khi rảnh thì chỉ chạy mỗi 100 ms để đỡ tốn CPU (thử thách~\ref{tt:cpu} ở \cref{sec:thu-thach}).
 
 \subsection{Đường đi của dữ liệu}
 \label{subsec:duong-di}
 
+Mục này mô tả dữ liệu đi qua tầng transport như thế nào, từ lúc ứng dụng gọi hàm gửi cho tới khi bên kia nhận
+được.
+
 \paragraph{Phía gửi.}
 \begin{enumerate}
-  \item \fname{SendStream.Write} cắt dữ liệu thành frame $\le$ 1000 byte, gắn \texttt{stream\_id} và
-        \texttt{offset}, đẩy vào \texttt{urgentCh} (tin nhắn) hoặc \texttt{bulkCh} (file).
-  \item \fname{run()} chuyển frame vào hàng đợi tương ứng. Khi hàng đợi file đầy 256 frame, \fname{run()} ngừng
-        nhận từ \texttt{bulkCh}, nên \fname{Write} của ứng dụng bị chặn (\emph{backpressure}): gửi file
-        200 MB không làm phình bộ nhớ.
-  \item \fname{flush()}: còn cửa sổ thì lấy frame theo thứ tự \texttt{retransQ} $\to$ \texttt{urgentQ}
-        $\to$ \texttt{bulkQ} cho tới khi đầy gói (\cref{sec:hol}).
-  \item \fname{sendPacket()}: ghép ACK đang nợ (nếu có) + các frame, gán \texttt{packet\_num} mới, mã hóa,
-        \fname{WriteToUDP}; lưu vào \texttt{unacked[pn]} cùng thời điểm gửi và danh sách frame.
+  \item \fname{SendStream.Write} cắt dữ liệu thành các frame không quá 1000 byte, gắn \texttt{stream\_id} và
+        \texttt{offset}, rồi đẩy vào \texttt{urgentCh} nếu là tin nhắn hoặc \texttt{bulkCh} nếu là file.
+  \item \fname{run()} chuyển frame vào hàng đợi tương ứng. Khi hàng đợi file đã đầy 256 frame, \fname{run()}
+        tạm ngừng nhận từ \texttt{bulkCh}, nên lệnh \fname{Write} của ứng dụng bị chặn lại. Cơ chế này gọi là
+        \emph{backpressure}, nhờ nó mà gửi một file 200 MB cũng không làm bộ nhớ phình to.
+  \item \fname{flush()}: nếu cửa sổ còn chỗ thì lấy frame theo thứ tự ưu tiên \texttt{retransQ} (cần gửi lại)
+        $\to$ \texttt{urgentQ} (tin nhắn) $\to$ \texttt{bulkQ} (file) cho tới khi đầy gói (\cref{sec:hol}).
+  \item \fname{sendPacket()}: ghép ACK đang cần gửi (nếu có) với các frame, gán một \texttt{packet\_num} mới,
+        mã hóa rồi gửi bằng \fname{WriteToUDP}. Gói được lưu vào \texttt{unacked[pn]} cùng với thời điểm gửi và
+        danh sách frame, để sau này biết cần gửi lại những gì nếu gói bị mất.
 \end{enumerate}
 
-\paragraph{Phía nhận.} \fname{readLoop} $\to$ \fname{handlePacket}: kiểm tra header, giải mã (header là
-AAD), tách frame, ghi nhận \texttt{packet\_num} để ACK. Frame ACK đi vào \fname{onAck} (xóa khỏi
-\texttt{unacked}, đo RTT, tăng cwnd, phát hiện mất); frame STREAM đi vào \fname{recvStream.push} (ghép theo
-offset) rồi được giao cho ứng dụng.
+\paragraph{Phía nhận.} Gói đi từ \fname{readLoop} vào \fname{handlePacket}. Hàm này kiểm tra header, giải mã
+(header được dùng làm AAD, xem \cref{sec:bao-mat}), tách các frame và ghi nhận \texttt{packet\_num} để ACK sau.
+Mỗi loại frame được xử lý riêng:
+\begin{itemize}
+  \item Frame ACK đi vào \fname{onAck}: xóa các gói đã được xác nhận khỏi \texttt{unacked}, đo RTT, tăng cwnd
+        và kiểm tra xem có gói nào bị mất không.
+  \item Frame STREAM đi vào \fname{recvStream.push} để ghép theo offset, rồi được giao lên cho ứng dụng.
+\end{itemize}
 
 \subsection{ACK và phát hiện mất gói}
 \label{subsec:mat-goi}
 
-Bên nhận ACK ngay trong lần \fname{flush()} kế tiếp, không trì hoãn; nếu có dữ liệu cần gửi thì ACK đi kèm gói
-dữ liệu. Sau khi xử lý một gói, \fname{run()} xử lý luôn tối đa 32 gói đang chờ rồi mới flush, nên một ACK có
-thể xác nhận nhiều gói. ACK mang tối đa 8 khoảng, đủ mô tả các lỗ hổng gần nhất.
+Bên nhận gửi ACK ngay trong lần \fname{flush()} kế tiếp chứ không trì hoãn như TCP. Nếu lúc đó có dữ liệu
+cần gửi thì ACK được gửi kèm luôn trong gói dữ liệu. Ngoài ra, sau khi xử lý một gói, \fname{run()} xử lý luôn
+tối đa 32 gói đang chờ trong channel rồi mới flush, nên một ACK có thể xác nhận được nhiều gói cùng lúc. Mỗi ACK
+chứa tối đa 8 khoảng, đủ để mô tả các chỗ bị thiếu gần nhất.
 
-\paragraph{Ước lượng RTT.} Mỗi ACK cho gói mới nhất được xác nhận cho một mẫu RTT. Theo RFC~6298
-\cite{rfc6298}:
+\paragraph{Ước lượng RTT.} RTT (\emph{round-trip time}) là thời gian từ lúc gửi một gói tới lúc nhận được ACK
+của nó. Mỗi khi nhận ACK, nhóm lấy thời gian của gói mới nhất được xác nhận làm một mẫu RTT $R$, rồi cập nhật
+giá trị trung bình $\mathit{SRTT}$ và độ dao động $\mathit{RTTVAR}$ theo RFC~6298 \cite{rfc6298}:
 \begin{equation}
   \mathit{RTTVAR} \leftarrow \tfrac34 \mathit{RTTVAR} + \tfrac14 \lvert \mathit{SRTT} - R \rvert, \qquad
   \mathit{SRTT} \leftarrow \tfrac78 \mathit{SRTT} + \tfrac18 R
 \end{equation}
 
-\paragraph{Ba cách kết luận một gói đã mất} (theo RFC~9002 \cite{rfc9002}):
+\paragraph{Ba cách kết luận một gói đã mất.} Theo RFC~9002 \cite{rfc9002}, nhóm dùng ba cách sau để quyết định
+một gói đã bị mất:
 \begin{enumerate}
-  \item \textbf{Theo số đếm:} gói $pn$ chưa được ACK trong khi gói $\ge pn+3$ đã được ACK (bị ``vượt mặt''
-        3 gói). Ngưỡng 3 chừa chỗ cho việc mạng đảo thứ tự nhẹ.
-  \item \textbf{Theo thời gian:} đã có gói gửi sau nó được ACK, và nó đã chờ quá
-        $\tfrac98 \max(\mathit{SRTT}, R)$ với $R$ là mẫu RTT mới nhất. Cách này cần khi cwnd chỉ 2--3 gói: khi đó không
-        bao giờ có đủ 3 gói vượt mặt (thử thách~\ref{tt:cubic-cham}).
-  \item \textbf{Theo RTO:} không có ACK nào trong
+  \item \textbf{Theo số đếm:} gói $pn$ chưa được ACK trong khi gói $pn+3$ hoặc lớn hơn đã được ACK, tức là gói
+        $pn$ đã bị ``vượt mặt'' 3 gói. Nhóm chọn ngưỡng 3 để chừa chỗ cho trường hợp mạng đảo thứ tự gói nhẹ.
+  \item \textbf{Theo thời gian:} đã có gói gửi sau nó được ACK, và nó đã chờ lâu hơn
+        $\tfrac98 \max(\mathit{SRTT}, R)$. Cách này cần thiết khi cwnd chỉ còn 2--3 gói, vì khi đó sẽ không bao
+        giờ có đủ 3 gói để vượt mặt (thử thách~\ref{tt:cubic-cham}).
+  \item \textbf{Theo RTO} (\emph{retransmission timeout}): không nhận được ACK nào trong khoảng thời gian
         \begin{equation}
           \mathit{RTO} = \mathit{SRTT} + \max(4\cdot\mathit{RTTVAR},\ 1\,\text{ms}) + 10\,\text{ms}
           \label{eq:rto}
         \end{equation}
-        Đây là công thức PTO của QUIC. RTO ban đầu (chưa có mẫu RTT) là 500 ms.
+        Đây là công thức PTO của QUIC. Khi chưa có mẫu RTT nào, RTO ban đầu được đặt là 500 ms.
 \end{enumerate}
 
-Gói bị coi là mất thì \textbf{chỉ các STREAM frame của nó} được đưa vào \texttt{retransQ} (ACK/PING không gửi
-lại), theo đúng thứ tự gửi ban đầu, và đi trong gói mới với \texttt{packet\_num} mới, offset giữ nguyên
-(\cref{fig:seq-loss}).
+Khi một gói bị coi là mất, \textbf{chỉ các frame STREAM của nó} được đưa vào \texttt{retransQ} để gửi lại; frame
+ACK và PING thì không cần gửi lại. Các frame này giữ đúng thứ tự gửi ban đầu và giữ nguyên offset, nhưng được
+đóng vào một gói mới với \texttt{packet\_num} mới. \Cref{fig:seq-loss} minh họa toàn bộ quá trình này.
 
 \begin{figure}[H]
   \centering
@@ -181,57 +204,75 @@ lại), theo đúng thứ tự gửi ban đầu, và đi trong gói mới với 
   \label{fig:seq-loss}
 \end{figure}
 
-\paragraph{RTO backoff.} Hết RTO liên tiếp thì RTO nhân đôi (tối đa 5 s); có ACK mới thì trở lại bình thường.
-Khi mạng chết hẳn, bên gửi không bắn gói dồn dập làm mạng tệ thêm. Mất phát hiện theo số đếm hoặc thời gian
-(nghĩa là mạng vẫn còn sống, ACK vẫn về) thì không tăng backoff.
+\paragraph{RTO backoff.} Nếu hết RTO nhiều lần liên tiếp thì RTO được nhân đôi sau mỗi lần, tối đa 5 s; khi có
+ACK mới thì RTO trở lại bình thường. Mục đích là khi mạng chết hẳn, bên gửi không gửi gói dồn dập làm mạng càng
+tệ hơn. Còn nếu mất gói được phát hiện theo số đếm hoặc theo thời gian thì nghĩa là ACK vẫn về, mạng vẫn còn
+hoạt động, nên trường hợp này không tăng backoff.
 
-\paragraph{Vì sao không dùng RTO tối thiểu 200 ms như TCP?} TCP cần sàn lớn vì bên nhận TCP được trì hoãn ACK
-tới 200--500 ms. Bên nhận của giao thức này ACK ngay, nên dùng công thức~\eqref{eq:rto}. Trên loopback với loss
-10\%, sàn 200 ms làm throughput giảm khoảng 6 lần (141 KB/s so với 826 KB/s), vì gần như mọi lần mất ở cuối cửa
-sổ phải chờ trọn 200 ms trong khi RTT chỉ 0,4 ms. Ngược lại, nếu bỏ hẳn khoảng đệm
-($\mathit{RTO} = \mathit{SRTT} + 4\cdot\mathit{RTTVAR}$) thì trên đường truyền rất đều RTTVAR tiến về 0,
-RTO $\approx$ RTT, và mỗi ACK về chậm một chút bị tính là mất oan. Trên nút cổ chai 2 MB/s, lỗi đó kéo
-throughput xuống 0,87 MB/s; thêm khoảng đệm 1 ms + 10 ms thì đạt 2,01 MB/s.
+\paragraph{Vì sao không dùng RTO tối thiểu 200 ms như TCP?} TCP cần một mức sàn lớn cho RTO vì bên nhận TCP được
+phép trì hoãn ACK tới 200--500 ms. Bên nhận trong giao thức của nhóm thì ACK ngay, nên nhóm dùng
+công thức~\eqref{eq:rto} mà không đặt sàn 200 ms.
+
+Nhóm đã đo thử để so sánh. Trên loopback với tỉ lệ mất gói 10\%, nếu đặt sàn 200 ms thì throughput giảm khoảng
+6 lần (141 KB/s so với 826 KB/s). Nguyên nhân là gần như mọi lần mất gói ở cuối cửa sổ đều phải chờ đủ 200 ms,
+trong khi RTT thực tế chỉ khoảng 0,4 ms.
+
+Ngược lại, nhóm cũng thử bỏ hẳn khoảng đệm, tức là dùng $\mathit{RTO} = \mathit{SRTT} + 4\cdot\mathit{RTTVAR}$.
+Khi đường truyền rất ổn định, RTTVAR giảm dần về 0 nên RTO gần bằng RTT, và chỉ cần một ACK về chậm một chút là
+gói bị tính là mất oan. Trên nút cổ chai 2 MB/s, lỗi này kéo throughput xuống còn 0,87 MB/s. Sau khi thêm khoảng
+đệm 1 ms và 10 ms như trong công thức~\eqref{eq:rto}, throughput đạt 2,01 MB/s.
 
 \subsection{Ghép stream theo offset}
 \label{subsec:ghep}
-Mỗi stream có một \fname{recvStream} riêng gồm \texttt{next} (offset tiếp theo cần giao; mọi byte trước nó đã
-giao) và \texttt{pending} (các đoạn tới sớm, theo offset). Với một frame chiếm khoảng byte $[\mathit{off},
-\mathit{end})$:
+Ở phía nhận, mỗi stream có một \fname{recvStream} riêng gồm hai thành phần:
+\begin{itemize}
+  \item \texttt{next}: offset tiếp theo cần giao cho ứng dụng; mọi byte trước vị trí này đều đã được giao.
+  \item \texttt{pending}: các đoạn dữ liệu tới sớm, được sắp theo offset.
+\end{itemize}
+Khi nhận một frame chứa các byte trong khoảng $[\mathit{off}, \mathit{end})$, có ba trường hợp:
 
 \begin{itemize}
-  \item $\mathit{end} \le \mathit{next}$: đã giao rồi (bản gửi lại, bản lặp) $\Rightarrow$ bỏ.
-  \item $\mathit{off} > \mathit{next}$: tới sớm, phía trước còn chỗ trống $\Rightarrow$ cất vào
+  \item $\mathit{end} \le \mathit{next}$: dữ liệu này đã được giao rồi (do gửi lại hoặc gói bị lặp), nên bỏ đi.
+  \item $\mathit{off} > \mathit{next}$: dữ liệu tới sớm, phía trước vẫn còn chỗ trống, nên cất tạm vào
         \texttt{pending}.
-  \item Còn lại: nối tiếp được \texttt{next} (có thể chồng một phần) $\Rightarrow$ cắt phần đã giao, giao phần
-        mới, rồi giao tiếp các đoạn trong \texttt{pending} vừa liền mạch.
+  \item Các trường hợp còn lại: frame nối tiếp được \texttt{next} (có thể chồng lên một phần). Khi đó nhóm cắt bỏ
+        phần đã giao, giao phần mới cho ứng dụng, rồi giao tiếp các đoạn trong \texttt{pending} vừa trở nên liền
+        mạch.
 \end{itemize}
 
-Stream hoàn tất khi đã giao đủ mọi byte tới FIN. Frame FIN có thể tới trước dữ liệu phía trước nó; khi đó độ dài
-stream được ghi nhận và chờ cho đủ.
+Stream được coi là hoàn tất khi đã giao đủ mọi byte cho tới FIN. Frame mang cờ FIN có thể tới trước phần dữ liệu
+phía trước nó; trong trường hợp này nhóm ghi nhận độ dài của stream rồi chờ cho tới khi nhận đủ.
 
 \subsection{Điều khiển luồng}
 \label{subsec:dieu-toc}
-Mỗi ACK mang \texttt{window} = số byte bên nhận còn trống trong bộ đệm 1 MB (dữ liệu đã ghép nhưng ứng dụng
-chưa đọc, cộng dữ liệu tới sớm trong \texttt{pending}). Bên gửi chỉ gửi thêm một gói khi
+Điều khiển luồng nhằm đảm bảo bên gửi không gửi nhanh hơn khả năng xử lý của bên nhận. Mỗi bên nhận có một bộ
+đệm 1 MB, chứa dữ liệu đã ghép xong nhưng ứng dụng chưa đọc và dữ liệu tới sớm trong \texttt{pending}. Mỗi ACK
+mang trường \texttt{window} là số byte còn trống trong bộ đệm này. Bên gửi chỉ gửi thêm một gói khi
 \begin{equation}
   \min(\mathit{cwnd}, \mathit{window}) - \mathit{bytesInFlight} \ge 1200
 \end{equation}
-nên một bên nhận đọc chậm (ví dụ trình duyệt bị treo) làm bên gửi chậm lại thay vì làm tràn bộ nhớ của nó. Khi
-cửa sổ đã quảng bá xuống dưới 1/4 mà nay trống lại trên 1/2, bên nhận chủ động gửi ACK cập nhật cửa sổ để bên gửi
-không phải chờ. ACK cũ (tới sau ACK mới) không được ghi đè cửa sổ.
+Như vậy, nếu bên nhận đọc chậm (ví dụ trình duyệt bị treo) thì bên gửi sẽ tự chậm lại theo, thay vì gửi tới mức
+làm tràn bộ nhớ của bên nhận.
+
+Có một trường hợp nhóm phải xử lý thêm: khi cửa sổ đã báo cho bên gửi xuống dưới 1/4 nhưng sau đó bộ đệm trống lại
+trên 1/2, bên nhận chủ động gửi một ACK để cập nhật cửa sổ, nếu không bên gửi sẽ đứng chờ không cần thiết. Ngoài
+ra, một ACK cũ tới sau ACK mới thì không được ghi đè giá trị cửa sổ.
 
 \subsection{Phát hiện mất kết nối}
 \label{subsec:song-chet}
+UDP không có khái niệm kết nối, nên nhóm phải tự xác định khi nào bên kia đã rời đi hoặc mất mạng. Nhóm dùng các
+cơ chế sau:
 \begin{itemize}
-  \item \textbf{Keep-alive:} không gửi gì trong 2 s thì gửi PING. PING cần ACK, nên hai bên luôn biết nhau còn sống.
-  \item \textbf{Idle timeout:} không nhận được gói hợp lệ nào trong 10 s thì coi bên kia đã chết, đóng kết nối,
-        báo cho ứng dụng qua \fname{Done()}.
-  \item \textbf{CLOSE:} đóng chủ động thì gửi CLOSE để bên kia biết ngay thay vì đợi 10 s. CLOSE gửi một lần,
-        không gửi lại: nếu mất thì bên kia vẫn tự đóng sau idle timeout.
-  \item \textbf{PING đầu tiên:} server chỉ biết địa chỉ UDP của client khi nhận được gói đầu tiên của client.
-        Client gửi lại PING đầu sau 200, 400, 800 ms\dots{} (tối đa 2 s) tới khi nghe được server
-        (thử thách~\ref{tt:ping-dau}).
-  \item \textbf{Gói hỏng:} sai magic/version, \texttt{conn\_id} lạ, frame cụt, type lạ, giải mã thất bại: bỏ gói,
-        không panic, không đóng kết nối. Kẻ gửi rác không thể làm ngắt kết nối của người khác.
+  \item \textbf{Keep-alive:} nếu không gửi gì trong 2 s thì gửi một gói PING. Vì PING cần được ACK nên hai bên
+        luôn biết bên kia còn hoạt động.
+  \item \textbf{Idle timeout:} nếu không nhận được gói hợp lệ nào trong 10 s thì coi như bên kia đã chết. Khi đó
+        kết nối bị đóng và ứng dụng được báo qua \fname{Done()}.
+  \item \textbf{CLOSE:} khi chủ động đóng kết nối, bên đóng gửi CLOSE để bên kia biết ngay thay vì phải đợi
+        10 s. CLOSE chỉ gửi một lần, không gửi lại; nếu gói này bị mất thì bên kia vẫn tự đóng sau idle timeout.
+  \item \textbf{PING đầu tiên:} server chỉ biết địa chỉ UDP của client khi nhận được gói đầu tiên từ client. Vì
+        vậy client gửi lại PING đầu sau 200, 400, 800 ms\dots{} (tối đa 2 s) cho tới khi nhận được phản hồi từ
+        server (thử thách~\ref{tt:ping-dau}).
+  \item \textbf{Gói hỏng:} gói sai magic hoặc version, có \texttt{conn\_id} lạ, frame bị cụt, type không hợp lệ
+        hoặc giải mã thất bại đều bị bỏ đi. Chương trình không bị panic và kết nối không bị đóng, nhờ vậy kẻ gửi
+        gói rác không thể làm ngắt kết nối của người khác.
 \end{itemize}

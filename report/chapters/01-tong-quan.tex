@@ -1,31 +1,49 @@
 \section{Tổng quan}
 \label{sec:tong-quan}
 
-\subsection{Bài toán}
-Đề bài yêu cầu xây dựng một ứng dụng cộng tác theo mô hình client--server cho mạng nội bộ: người dùng đăng
-nhập, thấy danh sách người đang online, chat chung (broadcast), nhắn riêng (unicast) và gửi file. Điểm cốt lõi
-là toàn bộ dữ liệu phải đi qua \textbf{một giao thức tầng ứng dụng tự thiết kế trên UDP}, có đủ các tính chất
-mà UDP không có: truyền tin cậy, đúng thứ tự, điều khiển luồng và điều khiển tắc nghẽn (CUBIC hoặc BBR), mã hóa,
-và không bị \emph{Head-of-Line blocking} (HoL) giữa tin nhắn và file. Đề bài gợi ý tham khảo QUIC
-\cite{rfc9000} và Valve GameNetworkingSockets \cite{valve-gns} cho tầng transport hướng message.
+Chương này giới thiệu bài toán mà đề yêu cầu, các công nghệ nhóm chọn để hiện thực, cách nhóm chia hệ thống
+thành các tầng, và cuối cùng là bảng đối chiếu từng bước của đề với phần thiết kế tương ứng trong báo cáo.
 
-Ràng buộc kỹ thuật: chỉ dùng socket thô (không framework HTTP, không WebSocket), giao diện là trang web dùng
-JavaScript thuần phía client, server chịu được 10--20 client đồng thời.
+\subsection{Bài toán}
+Đề bài yêu cầu xây dựng một ứng dụng cộng tác theo mô hình client--server chạy trong mạng nội bộ. Người dùng có
+thể đăng nhập, xem danh sách những người đang online, chat chung với mọi người (broadcast), nhắn riêng cho một
+người (unicast) và gửi file cho nhau.
+
+Điểm khó nhất của đề là toàn bộ dữ liệu phải đi qua \textbf{một giao thức tầng ứng dụng do nhóm tự thiết kế trên
+UDP}. UDP chỉ gửi từng gói rời rạc, không đảm bảo gói tới nơi và cũng không đảm bảo thứ tự, nên nhóm phải tự bổ
+sung những tính chất mà UDP không có:
+\begin{itemize}
+  \item truyền tin cậy và đúng thứ tự;
+  \item điều khiển luồng (không gửi nhanh hơn khả năng nhận của bên kia) và điều khiển tắc nghẽn (không gửi
+        nhanh hơn khả năng của mạng), dùng CUBIC hoặc BBR;
+  \item mã hóa dữ liệu;
+  \item không bị \emph{Head-of-Line blocking} (HoL), tức là một file lớn đang gửi không được làm tin nhắn chat
+        bị kẹt lại phía sau.
+\end{itemize}
+Đề bài gợi ý tham khảo QUIC \cite{rfc9000} và Valve GameNetworkingSockets \cite{valve-gns}, là hai giao thức
+transport hướng message được xây dựng trên UDP.
+
+Ngoài ra đề có một số ràng buộc kỹ thuật: chỉ được dùng socket thô (không dùng framework HTTP hay WebSocket),
+giao diện là trang web viết bằng JavaScript thuần, và server phải chịu được 10--20 client kết nối đồng thời.
 
 \subsection{Lựa chọn công nghệ}
-Hệ thống viết bằng \textbf{Go} và \textbf{chỉ dùng thư viện chuẩn}:
+Nhóm chọn viết toàn bộ hệ thống bằng \textbf{Go} và \textbf{chỉ dùng thư viện chuẩn} của Go, không dùng thư viện
+ngoài. Các package chính nhóm sử dụng gồm:
 \begin{itemize}
-  \item \fname{net}: socket TCP/UDP thô (\fname{net.ListenUDP}, \fname{WriteToUDP}, \fname{ReadFromUDP}).
+  \item \fname{net}: mở socket TCP/UDP thô (\fname{net.ListenUDP}, \fname{WriteToUDP}, \fname{ReadFromUDP}).
   \item \fname{crypto/ecdh}, \fname{crypto/aes}, \fname{crypto/cipher}, \fname{crypto/sha256}: trao đổi
         khóa X25519 và mã hóa AES-256-GCM.
-  \item \fname{encoding/binary}, \fname{encoding/json}: đóng gói header/frame nhị phân và nội dung tầng app.
+  \item \fname{encoding/binary}, \fname{encoding/json}: đóng gói header và frame dạng nhị phân, và mã hóa nội
+        dung tầng ứng dụng dạng JSON.
 \end{itemize}
-Go phù hợp với bài toán vì goroutine rất rẻ (vài KB stack): mỗi kết nối có goroutine riêng mà server 20 client
-vẫn chỉ có vài chục goroutine; \fname{select} trên channel cho phép viết vòng lặp sự kiện của mỗi kết nối mà
-không cần khóa.
+Lý do nhóm chọn Go là goroutine (luồng nhẹ của Go) rất rẻ, mỗi goroutine chỉ tốn vài KB stack. Nhờ vậy mỗi
+kết nối có thể có goroutine riêng, và server phục vụ 20 client cũng chỉ cần vài chục goroutine. Bên cạnh đó, câu
+lệnh \fname{select} trên channel cho phép nhóm viết vòng lặp xử lý sự kiện của mỗi kết nối mà không cần dùng khóa
+(mutex).
 
 \subsection{Phân tầng}
-Hệ thống chia thành các tầng tách biệt, đúng yêu cầu ``tách logic mạng, xử lý dữ liệu và giao diện'' của đề:
+Đề yêu cầu tách riêng logic mạng, xử lý dữ liệu và giao diện. Để đáp ứng yêu cầu này, nhóm chia hệ thống thành
+bốn tầng như trong \cref{tab:tang}.
 
 \begin{table}[H]
   \centering
@@ -46,9 +64,10 @@ Hệ thống chia thành các tầng tách biệt, đúng yêu cầu ``tách log
   \end{tabularx}
 \end{table}
 
-Tầng ứng dụng chỉ thấy interface \fname{transport.Endpoint} (\cref{sec:api}): gửi một message, mở một stream
-dài, nhận các đoạn byte đã đúng thứ tự. Mọi chi tiết UDP (gói, ACK, gửi lại, mã hóa) nằm gọn trong tầng
-transport.
+Tầng ứng dụng chỉ làm việc với interface \fname{transport.Endpoint} (\cref{sec:api}). Qua interface này, tầng ứng
+dụng chỉ cần gửi một message, mở một stream dài để gửi file, và nhận lại các đoạn byte đã được sắp đúng thứ tự.
+Mọi chi tiết liên quan tới UDP như chia gói, ACK, gửi lại hay mã hóa đều nằm trong tầng transport, tầng ứng dụng
+không cần biết tới.
 
 \subsection{Đối chiếu với 10 bước của đề}
 \label{subsec:rubric}

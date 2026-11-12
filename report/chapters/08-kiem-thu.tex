@@ -1,7 +1,12 @@
 \section{Kiểm thử}
 \label{sec:kiem-thu}
 
-\paragraph{Môi trường.} WSL2 (Linux 6.18, 18 CPU), Go 1.27.3, loopback. Ngày đo: 12/11/2026.
+Chương này trình bày cách nhóm kiểm thử hệ thống: bộ giả lập mạng dùng để tạo ra các điều kiện mạng xấu, các
+test đơn vị và tích hợp, các phép đo hiệu năng của tầng transport, và cuối cùng là các kịch bản chạy thử toàn hệ
+thống.
+
+\paragraph{Môi trường.} Các phép đo của tầng transport được chạy trên WSL2 (Linux 6.18, 18 CPU), Go 1.27.3, qua
+loopback, vào ngày 12/11/2026. Các lệnh nhóm dùng để kiểm tra:
 \begin{center}
   \small
   \begin{tabularx}{\linewidth}{lY}
@@ -13,8 +18,9 @@
 
 \subsection{Giả lập mạng}
 \label{subsec:gia-lap}
-Loopback không bao giờ mất gói và có RTT dưới 1 ms, nên không kiểm tra được gì về độ tin cậy hay điều khiển tắc
-nghẽn. \fname{LossyConn} bọc socket UDP thật và làm xấu chiều gửi theo cấu hình:
+Khi chạy trên loopback, gói không bao giờ bị mất và RTT chỉ dưới 1 ms, nên không thể kiểm tra được cơ chế
+truyền tin cậy hay điều khiển tắc nghẽn. Vì vậy nhóm viết \fname{LossyConn}, một lớp bọc bên ngoài socket UDP
+thật, có nhiệm vụ cố ý làm xấu chiều gửi theo các tham số trong \cref{tab:lossy}.
 
 \begin{table}[H]
   \centering
@@ -34,10 +40,11 @@ nghẽn. \fname{LossyConn} bọc socket UDP thật và làm xấu chiều gửi 
   \end{tabularx}
 \end{table}
 
-Ứng dụng client/server cũng nhận cờ \texttt{-loss} để demo trên máy thật.
+Chương trình client và server cũng nhận cờ \texttt{-loss} để có thể demo việc mất gói khi chạy trên máy thật.
 
 \subsection{Test đơn vị và tích hợp của tầng giao thức và transport}
-65 test (20 ở \fname{internal/protocol}, 45 ở \fname{internal/transport}) chạy trong khoảng 15 giây:
+Tầng giao thức và transport có tổng cộng 65 test, gồm 20 test trong \fname{internal/protocol} và 45 test trong
+\fname{internal/transport}, chạy hết trong khoảng 15 giây. \Cref{tab:unit-test} tóm tắt nội dung các nhóm test.
 
 \begin{longtable}{L{0.24\linewidth} L{0.7\linewidth}}
   \caption{Các nhóm test của tầng giao thức và transport}\label{tab:unit-test} \\
@@ -75,6 +82,9 @@ nghẽn. \fname{LossyConn} bọc socket UDP thật và làm xấu chiều gửi 
 
 \subsection{Phép đo tầng transport}
 \label{subsec:do-transport}
+Ngoài các test kiểm tra đúng sai, nhóm còn đo tốc độ truyền một stream dài qua mạng giả lập với nhiều điều kiện
+khác nhau, kết quả ở \cref{tab:do-transport}. Cột ``CC'' cho biết thuật toán điều khiển tắc nghẽn được dùng:
+CUBIC hoặc cửa sổ cố định.
 
 \begin{table}[H]
   \centering
@@ -96,10 +106,11 @@ nghẽn. \fname{LossyConn} bọc socket UDP thật và làm xấu chiều gửi 
   \end{tabularx}
 \end{table}
 
-``Gói mất'' là tỉ lệ gói bên gửi coi là mất và đã gửi lại, so với tổng số gói đã gửi; nó lớn hơn tỉ lệ loss đặt
-cho chiều dữ liệu vì ACK ở chiều ngược lại cũng bị mất. Với 20 MB qua jitter 20 ms mà không mất gói, chỉ 0,2\%
-gói bị coi là mất oan (trước khi sửa bộ giả lập: 89\%, thử thách~\ref{tt:jitter}). Độ trễ tin chat khi đang
-truyền file: \cref{tab:hol}.
+Cột ``Gói mất'' là tỉ lệ số gói mà bên gửi coi là đã mất và phải gửi lại, so với tổng số gói đã gửi. Con số này
+lớn hơn tỉ lệ loss đặt cho chiều dữ liệu, vì ACK ở chiều ngược lại cũng bị mất. Đáng chú ý là với 20 MB qua
+jitter 20 ms và không đặt mất gói, chỉ có 0,2\% gói bị coi là mất oan; trước khi nhóm sửa bộ giả lập, con số này
+là 89\% (thử thách~\ref{tt:jitter}). Kết quả đo độ trễ tin chat trong lúc truyền file đã được trình bày ở
+\cref{tab:hol}.
 
 \subsection{Test tích hợp và hệ thống của tầng ứng dụng}
 \label{subsec:test-he-thong}

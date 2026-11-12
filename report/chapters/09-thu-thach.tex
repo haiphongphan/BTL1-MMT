@@ -1,42 +1,58 @@
 \section{Thử thách và cách giải quyết}
 \label{sec:thu-thach}
 
+Trong quá trình làm, nhóm gặp khá nhiều lỗi mà lúc đầu không lường trước. Phần lớn các lỗi này chỉ lộ ra khi
+nhóm bắt đầu đo đạc trên mạng giả lập, chứ chạy thử bình thường trên loopback thì không thấy. Chương này ghi lại
+các vấn đề chính, nguyên nhân nhóm tìm ra và cách nhóm đã sửa.
+
 \subsection{Tầng giao thức và transport}
-\begin{enumerate}[label=\textbf{\arabic*.}, ref=\arabic*, leftmargin=*, itemsep=2pt]
-  \item \label{tt:cubic-cham}\textbf{CUBIC làm transport chậm 280 lần ở loss 10\%.} cwnd nằm ở sàn 2 gói nên
-        không bao giờ có đủ ``3 gói vượt mặt''; mọi lần mất phải chờ RTO, khi đó còn có sàn 200 ms như TCP, trong
-        khi RTT trên loopback chỉ 0,4 ms. \emph{Giải pháp:} thêm phát hiện mất theo thời gian (9/8 RTT) và dùng
-        công thức RTO của QUIC, bỏ sàn 200 ms vì bên nhận không trì hoãn ACK (\cref{subsec:mat-goi}).
-  \item \label{tt:jitter}\textbf{89\% gói bị coi là mất dù loss = 0.} Bản đầu của bộ giả lập jitter hẹn giờ
-        từng gói độc lập, nên gói bị đảo thứ tự hàng loạt và luật ``3 gói vượt mặt'' kết luận sai. Mạng thật hầu
-        như giữ thứ tự vì router xếp hàng FIFO. \emph{Giải pháp:} giả lập jitter bằng hàng đợi FIFO; tỉ lệ mất
-        oan còn 0,1\%. Bài học: bộ giả lập sai thì mọi số đo trên nó đều sai.
-  \item \label{tt:ping-dau}\textbf{Client mới ``điếc'' 2--4 giây khi mạng mất gói.} Server chỉ biết địa chỉ
-        UDP của client khi nhận được gói đầu tiên. Nếu PING đầu bị mất, server không gửi được gì cho tới PING
-        keep-alive 2 s sau. \emph{Giải pháp:} client gửi lại PING đầu sau 200, 400, 800 ms\dots{} tới khi nghe
-        được server, giống QUIC gửi lại gói Initial. Gửi file 1 KB ở loss 10\%: từ 2--4 s còn $\le$ 0,6 s.
-  \item \label{tt:cpu}\textbf{Server tốn 43\% CPU khi 20 client không làm gì.} Mỗi kết nối có đồng hồ 10 ms kể
-        cả khi rảnh, nên Go scheduler bị đánh thức hàng nghìn lần mỗi giây (profile: \texttt{futex},
-        \texttt{findRunnable}). \emph{Giải pháp:} đồng hồ 10 ms chỉ khi có gói chờ ACK, 100 ms khi rảnh (keep-alive
-        2 s và timeout 10 s không cần chính xác tới 10 ms). CPU còn 3,1\%, throughput không đổi.
-  \item \textbf{Code CUBIC ban đầu ra đường thẳng như Reno.} Nhánh ``tăng 1 gói mỗi RTT'' lấn át đường bậc 3
-        khi RTT ngắn. \emph{Giải pháp:} viết lại theo RFC~9438, tính $W_\text{cubic}$ và $W_\text{est}$ song song,
-        lấy giá trị lớn hơn; kiểm tra bằng đồ thị (\cref{fig:cwnd-zoom}).
-  \item \textbf{Tin chat đến sai thứ tự dù không mất gói nào.} Mỗi tin là một stream riêng để tránh HoL, nên
-        stream nào xong trước được giao trước. \emph{Giải pháp:} đánh số \texttt{Seq} ở tầng ứng dụng và sắp lại
-        bằng \fname{SeqBuffer}; tầng transport vẫn không có HoL (\cref{subsec:app}).
-  \item \label{tt:nonce}\textbf{Trùng nonce GCM giữa hai chiều.} Hai bên dùng chung $k_\text{udp}$ và cùng đánh
-        \texttt{packet\_num} từ 0. \emph{Giải pháp:} thêm byte chiều vào nonce (\cref{sec:bao-mat}).
-  \item \textbf{RTT mập mờ khi gửi lại.} Với TCP, ACK của đoạn gửi lại không cho biết nó xác nhận lần gửi nào.
-        \emph{Giải pháp:} gửi lại luôn dùng \texttt{packet\_num} mới, không cần thuật toán Karn.
-  \item \textbf{Ghi vào stream đã đóng vẫn ``thành công''.} \fname{select} giữa ``channel có buffer còn chỗ'' và
-        ``kết nối đã đóng'' được Go chọn ngẫu nhiên khi cả hai đều sẵn sàng. \emph{Giải pháp:} kiểm tra
-        \texttt{done} trước khi ghi.
-  \item \textbf{Hai bên ACK nhau vô hạn; phân mảnh IP.} Gói chỉ chứa ACK thì không ACK lại; mọi gói $\le$ 1200
-        byte.
-  \item \textbf{Data race} giữa goroutine nhận và ứng dụng, phát hiện bằng \fname{go test -race}.
-        \emph{Giải pháp:} một goroutine duy nhất sở hữu state của kết nối, giao tiếp qua channel
-        (\cref{subsec:concurrency}).
+\begin{enumerate}[label=\textbf{\arabic*.}, ref=\arabic*, leftmargin=*, itemsep=4pt]
+  \item \label{tt:cubic-cham}\textbf{CUBIC làm tốc độ truyền giảm tới 280 lần khi mất 10\% gói.} Khi ghi lại cwnd,
+        nhóm thấy cwnd gần như luôn nằm ở mức sàn 2 gói. Với chỉ 2 gói
+        đang trên đường truyền, bên gửi không bao giờ nhận được đủ ``3 gói vượt mặt'' để phát hiện mất sớm, nên
+        lần mất nào cũng phải chờ hết RTO. Thêm vào đó, ban đầu nhóm đặt RTO tối thiểu 200 ms giống TCP, trong
+        khi RTT trên loopback chỉ khoảng 0,4 ms. \emph{Cách giải quyết:} nhóm bổ sung cách phát hiện mất gói theo
+        thời gian (sau 9/8 RTT), chuyển sang công thức RTO của QUIC và bỏ mức sàn 200 ms, vì bên nhận của nhóm
+        không trì hoãn ACK như TCP (\cref{subsec:mat-goi}).
+  \item \label{tt:jitter}\textbf{89\% số gói bị coi là mất dù không đặt mất gói.} Lỗi này nằm ở bộ giả lập chứ
+        không phải ở giao thức. Bản đầu của bộ giả lập jitter hẹn giờ cho từng gói một cách độc lập, nên các gói
+        bị đảo thứ tự hàng loạt, và quy tắc ``3 gói vượt mặt'' kết luận sai là gói đã mất. Trong khi đó mạng thật
+        hầu như giữ đúng thứ tự, vì router xếp gói theo hàng đợi FIFO. \emph{Cách giải quyết:} nhóm viết lại phần
+        giả lập jitter dùng hàng đợi FIFO, sau đó tỉ lệ mất oan chỉ còn 0,1\%. Qua lỗi này nhóm nhận ra là phải
+        kiểm tra kỹ cả bộ giả lập, vì nếu nó sai thì mọi số đo dựa trên nó cũng sai theo.
+  \item \label{tt:ping-dau}\textbf{Client mới kết nối bị ``điếc'' 2--4 giây khi mạng mất gói.} Server chỉ biết
+        địa chỉ UDP của client khi nhận được gói đầu tiên từ client. Nếu gói PING đầu tiên bị mất, server không
+        gửi được gì cho client cho tới gói PING keep-alive tiếp theo, tức là 2 s sau. \emph{Cách giải quyết:}
+        client gửi lại PING đầu sau 200, 400, 800 ms\dots{} cho tới khi nhận được phản hồi từ server, giống cách
+        QUIC gửi lại gói Initial. Kết quả là thời gian gửi một file 1 KB khi mất 10\% gói giảm từ 2--4 s xuống
+        còn không quá 0,6 s.
+  \item \label{tt:cpu}\textbf{Server tốn 43\% CPU dù 20 client không làm gì.} Nhóm dùng profiler để tìm nguyên
+        nhân và thấy phần lớn thời gian nằm ở \texttt{futex} và \texttt{findRunnable}. Lý do là mỗi kết nối có
+        một đồng hồ chạy mỗi 10 ms kể cả khi rảnh, nên bộ lập lịch của Go bị đánh thức hàng nghìn lần mỗi giây.
+        \emph{Cách giải quyết:} đồng hồ chỉ chạy mỗi 10 ms khi có gói đang chờ ACK, còn khi rảnh thì chạy mỗi
+        100 ms, vì keep-alive 2 s và timeout 10 s không cần chính xác tới 10 ms. Sau khi sửa, CPU giảm còn
+        3,1\% mà throughput không thay đổi.
+  \item \textbf{Đồ thị cwnd của CUBIC ban đầu là đường thẳng giống Reno.} Nhóm phát hiện ra khi vẽ đồ thị cwnd:
+        nhánh ``tăng 1 gói mỗi RTT'' đã lấn át đường bậc 3 khi RTT ngắn. \emph{Cách giải quyết:} nhóm viết lại
+        theo đúng RFC~9438, tính $W_\text{cubic}$ và $W_\text{est}$ song song rồi lấy giá trị lớn hơn, sau đó
+        kiểm tra lại bằng đồ thị (\cref{fig:cwnd-zoom}).
+  \item \textbf{Tin chat tới sai thứ tự dù không mất gói nào.} Vì mỗi tin là một stream riêng để tránh HoL, nên
+        stream nào nhận xong trước thì được giao trước. \emph{Cách giải quyết:} nhóm đánh số \texttt{Seq} ở tầng
+        ứng dụng và dùng \fname{SeqBuffer} để sắp lại thứ tự. Nhờ vậy tầng transport vẫn giữ được tính chất
+        không HoL (\cref{subsec:app}).
+  \item \label{tt:nonce}\textbf{Hai chiều dùng trùng nonce GCM.} Hai bên dùng chung khóa $k_\text{udp}$ và cùng đánh \texttt{packet\_num} từ 0, nên gói cùng số ở hai chiều sẽ có
+        cùng nonce. \emph{Cách giải quyết:} thêm một byte chỉ chiều truyền vào nonce (\cref{sec:bao-mat}).
+  \item \textbf{Đo RTT bị nhầm khi gửi lại.} Với TCP, khi một đoạn được gửi lại thì ACK nhận về không cho biết nó
+        xác nhận lần gửi nào. \emph{Cách giải quyết:} mỗi lần gửi lại luôn dùng \texttt{packet\_num} mới, nên
+        nhóm không cần dùng thêm thuật toán Karn.
+  \item \textbf{Ghi vào stream đã đóng nhưng vẫn báo ``thành công''.} Trong câu lệnh \fname{select}, nếu cả hai
+        nhánh ``channel còn chỗ trống'' và ``kết nối đã đóng'' cùng sẵn sàng thì Go chọn ngẫu nhiên một nhánh.
+        \emph{Cách giải quyết:} kiểm tra \texttt{done} trước khi ghi.
+  \item \textbf{Hai bên ACK nhau mãi không dừng, và gói bị phân mảnh IP.} \emph{Cách giải quyết:} quy định gói
+        chỉ chứa ACK thì không được ACK lại, và giới hạn mọi gói không quá 1200 byte.
+  \item \textbf{Data race} giữa goroutine nhận gói và goroutine của ứng dụng, phát hiện được nhờ
+        \fname{go test -race}. \emph{Cách giải quyết:} chỉ để một goroutine duy nhất giữ state của kết nối, các
+        goroutine khác giao tiếp với nó qua channel (\cref{subsec:concurrency}).
 \end{enumerate}
 
 \subsection{Tầng ứng dụng}

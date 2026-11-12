@@ -2,16 +2,20 @@
 \label{sec:ket-luan}
 
 \subsection{Kết quả đạt được}
-Ở tầng giao thức và transport, hệ thống đã biến UDP thành một kênh truyền tin cậy, mã hóa, nhiều stream độc lập
-và tự điều tốc, chỉ bằng thư viện chuẩn của Go:
+Qua bài tập lớn này, nhóm đã xây dựng được một ứng dụng chat và gửi file chạy trên giao thức do nhóm tự thiết kế.
+Ở tầng giao thức và transport, nhóm đã biến UDP thành một kênh truyền tin cậy, có mã hóa, hỗ trợ nhiều stream độc
+lập và tự điều chỉnh tốc độ, mà chỉ dùng thư viện chuẩn của Go. Cụ thể:
 \begin{itemize}
-  \item Dữ liệu đúng từng byte qua mạng mất 20\% gói mỗi chiều; chỉ gửi lại các frame bị mất nhờ SACK.
-  \item CUBIC dùng hết băng thông nút cổ chai (2,01 MB/s trên 2 MB/s) và cho đúng hình dạng đường bậc 3 của
-        RFC~9438.
-  \item Không có Head-of-Line blocking: khi đang gửi file, tin chat chỉ chậm hơn lúc rảnh vài ms, so với gần
-        1 giây nếu không có hàng đợi ưu tiên.
-  \item Mọi gói được mã hóa và xác thực bằng AES-256-GCM với khóa từ ECDH X25519; nonce không bao giờ lặp.
-  \item Thiết kế một goroutine sở hữu state cho mỗi kết nối: không cần mutex, \fname{go test -race} sạch.
+  \item Dữ liệu tới đúng từng byte ngay cả khi mạng mất 20\% gói ở mỗi chiều. Nhờ SACK, bên gửi chỉ cần gửi lại
+        những frame thật sự bị mất.
+  \item CUBIC dùng hết băng thông của nút cổ chai (đạt 2,01 MB/s trên đường truyền 2 MB/s), và đồ thị cwnd có
+        đúng hình dạng đường bậc 3 như mô tả trong RFC~9438.
+  \item Không có Head-of-Line blocking: trong lúc đang gửi file, tin chat chỉ chậm hơn lúc rảnh vài ms, trong khi
+        nếu không có hàng đợi ưu tiên thì tin chat bị chậm gần 1 giây.
+  \item Mọi gói UDP đều được mã hóa và xác thực bằng AES-256-GCM, với khóa sinh ra từ ECDH X25519, và nonce không
+        bao giờ bị lặp lại.
+  \item Mỗi kết nối chỉ có một goroutine giữ state, nên tầng transport không cần dùng mutex và
+        \fname{go test -race} không phát hiện data race nào.
 \end{itemize}
 
 Ở tầng ứng dụng:
@@ -28,12 +32,15 @@ và tự điều tốc, chỉ bằng thư viện chuẩn của Go:
 \end{itemize}
 
 \subsection{Hướng phát triển}
+Nếu có thêm thời gian, nhóm dự định cải thiện hệ thống theo các hướng sau:
 \begin{itemize}
-  \item \textbf{BBR thay cho CUBIC} \cite{bbr}: ước lượng băng thông và RTT tối thiểu thay vì phản ứng với mất
-        gói, để không giảm tốc khi mất gói ngẫu nhiên (\cref{subsec:cubic-gioi-han}).
-  \item \textbf{Xác thực server:} ký \texttt{server\_pub} bằng khóa dài hạn để chống man-in-the-middle; tách
-        khóa bằng HKDF.
-  \item \textbf{Ưu tiên giữa các file:} hiện mọi file chung một hàng bulk theo thứ tự đến; có thể chia băng
-        thông đều giữa các file (round-robin) để file nhỏ không phải chờ file lớn.
-  \item \textbf{Gửi file trực tiếp giữa hai client} (UDP hole punching) để giảm tải cho server.
+  \item \textbf{Dùng BBR thay cho CUBIC} \cite{bbr}. BBR ước lượng băng thông và RTT tối thiểu của đường truyền
+        thay vì phản ứng với mất gói, nên sẽ không bị giảm tốc oan khi mạng mất gói ngẫu nhiên
+        (\cref{subsec:cubic-gioi-han}).
+  \item \textbf{Xác thực server:} server ký \texttt{server\_pub} bằng một khóa dài hạn để chống tấn công
+        man-in-the-middle, đồng thời tách khóa bằng HKDF thay cho SHA-256 đơn thuần.
+  \item \textbf{Chia băng thông giữa các file:} hiện tại mọi file dùng chung một hàng đợi bulk và được gửi theo
+        thứ tự đến. Nhóm có thể chia đều băng thông giữa các file (round-robin) để file nhỏ không phải chờ file
+        lớn gửi xong.
+  \item \textbf{Gửi file trực tiếp giữa hai client} bằng kỹ thuật UDP hole punching, để giảm tải cho server.
 \end{itemize}
