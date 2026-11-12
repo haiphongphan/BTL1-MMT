@@ -48,13 +48,13 @@ func NewServer(usersFilePath string, udpPort int) (*Server, error) {
 	return srv, nil
 }
 
-func (s *Server) ListenUDP(loss float64) error {
+func (s *Server) ListenUDP(loss float64, jitter time.Duration) error {
 	sock, err := net.ListenUDP("udp", &net.UDPAddr{Port: s.udpPort})
 	if err != nil {
 		return err
 	}
 	var pc transport.PacketConn = sock
-	if loss > 0 {
+	if loss > 0 || jitter > 0 {
 		pc = &transport.LossyConn{UDPConn: sock, Loss: loss}
 	}
 	s.mux = transport.NewMux(pc)

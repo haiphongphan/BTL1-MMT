@@ -18,6 +18,7 @@ type Client struct {
 	User        string
 	Events      *EventLog
 	DownloadDir string
+	Jitter time.Duration
 
 	mu      sync.Mutex // bảo vệ mọi field bên dưới
 	online  []string
@@ -130,7 +131,7 @@ func (c *Client) dial() error {
 		return err
 	}
 	var pc transport.PacketConn = sock
-	if loss > 0 {
+	if loss > 0 || c.Jitter > 0 {
 		pc = &transport.LossyConn{UDPConn: sock, Loss: loss}
 	}
 	conn, err := transport.Dial(pc, srvUDP, keyx.ConnID, kUDP) // Dial tự gửi PING đầu tiên
