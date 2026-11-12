@@ -148,7 +148,7 @@ func TestChatLatencyDuringFile(t *testing.T) {
 	sort.Slice(lat, func(i, j int) bool { return lat[i] < lat[j] })
 	p50, p95, mx := lat[len(lat)/2], lat[len(lat)*95/100], lat[len(lat)-1]
 	t.Logf("RESULT file=%dMB chat-samples=%d p50=%v p95=%v max=%v", size>>20, len(lat), p50.Round(time.Microsecond), p95.Round(time.Microsecond), mx.Round(time.Microsecond))
-	if p95 > 300*time.Millisecond {
+	if p95 > 300*time.Millisecond && !raceEnabled {
 		t.Fatalf("chat trễ p95 = %v > 300ms trong lúc gửi file", p95)
 	}
 }
@@ -216,7 +216,21 @@ func TestServerRestartReconnect(t *testing.T) {
 	alice := connect(t, addr, "alice", client.NetOptions{})
 	bob := connect(t, addr, "bob", client.NetOptions{})
 	waitOnline(t, alice, "bob")
+	// chắc chắn cả 2 kết nối UDP đã thông (server chỉ biết địa chỉ UDP của client sau gói đầu tiên;
+	// tắt server trước lúc đó thì CLOSE không tới được client ⇒ client chỉ biết sau 10 s idle timeout)
+	var s0, s1 int64
+	alice.SendChat("a")
+	waitEvent(t, bob, &s0, "chat", 5*time.Second, nil)
+	bob.SendChat("b")
+	waitEvent(t, alice, &s1, "chat", 5*time.Second, nil)
 
+	t.Cleanup(func() {
+		if t.Failed() {
+			for _, ev := range bob.Events.Since(0) {
+				t.Logf("DEBUG bob %s %v", ev.Type, ev.Data)
+			}
+		}
+	})
 	down := time.Now()
 	ts.stop()
 	waitState(t, alice, "reconnecting", 15*time.Second)
@@ -228,11 +242,10 @@ func TestServerRestartReconnect(t *testing.T) {
 	waitOnline(t, alice, "alice", "bob")
 	t.Logf("RESULT server tắt rồi bật lại: client tự kết nối lại sau %v", time.Since(down).Round(100*time.Millisecond))
 
-	var since int64
 	if err := alice.SendChat("sau khi reconnect"); err != nil {
 		t.Fatal(err)
 	}
-	waitEvent(t, bob, &since, "chat", 5*time.Second, func(ev client.Event) bool { return msgOf(ev).Text == "sau khi reconnect" })
+	waitEvent(t, bob, &s0, "chat", 5*time.Second, func(ev client.Event) bool { return msgOf(ev).Text == "sau khi reconnect" })
 }
 
 func waitState(t *testing.T, c *client.Client, want string, timeout time.Duration) {

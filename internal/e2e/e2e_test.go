@@ -121,7 +121,13 @@ func waitOnline(t *testing.T, c *client.Client, want ...string) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("%s: danh sách online %v, thiếu một trong %v", c.User, c.OnlineUsers(), want)
+	var hist []string
+	for _, ev := range c.Events.Since(0) {
+		if ev.Type == "users" || ev.Type == "status" {
+			hist = append(hist, fmt.Sprintf("%s:%v", ev.Type, ev.Data))
+		}
+	}
+	t.Fatalf("%s: danh sách online %v, thiếu một trong %v\nlịch sử: %v", c.User, c.OnlineUsers(), want, hist)
 }
 
 // collectTexts lấy n tin loại typ đầu tiên mà c nhận được.

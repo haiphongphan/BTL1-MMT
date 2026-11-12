@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -28,6 +29,9 @@ type Server struct {
 	nextConnID atomic.Uint32
 	udpPort    int
 	mux        *transport.Mux
+	// usersMu: đọc danh sách user + xếp tin "users" vào hàng đợi phải là 1 bước. Nếu 2 broadcast chạy xen kẽ
+	// (2 người đăng nhập cùng lúc), bản cũ có thể được xếp SAU bản mới ⇒ client hiển thị sai người online.
+	usersMu sync.Mutex
 }
 
 func NewServer(usersFilePath string, udpPort int) (*Server, error) {

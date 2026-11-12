@@ -173,6 +173,8 @@ func (s *Server) dropSession(sess *Session) {
 }
 
 func (s *Server) broadcastUserList() {
+	s.usersMu.Lock() // Send không chặn nên giữ lock ở đây không làm chậm ai
+	defer s.usersMu.Unlock()
 	users := s.reg.Names()
 	packet := protocol.AppMsg{
 		Type:  "users",
