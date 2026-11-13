@@ -21,7 +21,8 @@ và tự điều tốc, chỉ bằng thư viện chuẩn của Go:
         \texttt{Seq} ở tầng ứng dụng.
   \item File được chuyển tiếp theo kiểu pipeline nên bộ nhớ server không phụ thuộc kích thước file; người nhận
         kiểm tra SHA-256 đầu cuối; tin chat gửi trong lúc truyền file 200 MB vẫn tới trong khoảng 0,1 s.
-  \item Giao diện web chạy trên HTTP/1.1 tự viết với JavaScript thuần: danh sách user, tab chat chung và riêng,
+  \item Giao diện web chạy trên HTTP/1.1 tự viết với JavaScript thuần: trang đăng nhập / đăng ký (tài khoản mới
+        được server lưu ngay vào \texttt{users.json}), danh sách user, tab chat chung và riêng,
         gửi file kèm thanh tiến trình ở cả hai đầu, trạng thái kết nối với RTT, cwnd và tỉ lệ mất gói.
   \item Client tự tìm server trong LAN qua broadcast (\texttt{-server auto}); server theo dõi IP:port của từng
         user và hiện trong danh sách user.
@@ -38,4 +39,6 @@ và tự điều tốc, chỉ bằng thư viện chuẩn của Go:
   \item \textbf{Ưu tiên giữa các file:} hiện mọi file chung một hàng bulk theo thứ tự đến; có thể chia băng
         thông đều giữa các file (round-robin) để file nhỏ không phải chờ file lớn.
   \item \textbf{Gửi file trực tiếp giữa hai client} (UDP hole punching) để giảm tải cho server.
+  \item \textbf{Tài khoản an toàn hơn:} băm mật khẩu bằng Argon2, giới hạn số lần đăng nhập sai và đăng ký theo
+        IP, kiểm tra \texttt{Origin} ở API của Web UI để chống CSRF.
 \end{itemize}

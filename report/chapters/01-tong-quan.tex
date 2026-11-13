@@ -65,10 +65,11 @@ transport.
   \endhead
   1 & Thiết kế giao thức & Gói UDP $\le$ 1200 byte, 4 loại frame, nhiều stream ghép kênh trong 1 kết nối,
   nội dung stream MESSAGE/FILE & \cref{sec:giao-thuc} \\
-  2 & Handshake TCP & \texttt{HELLO} $\to$ \texttt{KEYX} $\to$ \texttt{AUTH} $\to$
+  2 & Handshake TCP & \texttt{HELLO} $\to$ \texttt{KEYX} $\to$ \texttt{AUTH} (hoặc \texttt{REGISTER}) $\to$
   \texttt{AUTH\_OK}/\texttt{AUTH\_FAIL}, mỗi message đóng khung \texttt{[len][JSON]}; server dành một goroutine
   cho mỗi handshake, deadline 10 s & \cref{subsec:handshake}, \cref{fig:seq-login} \\
-  3 & Đăng nhập, quản lý trạng thái & \texttt{users.json} chỉ lưu \texttt{sha256(salt $\|$ pass)};
+  3 & Đăng nhập, quản lý trạng thái & Trang đăng nhập / đăng ký trên Web UI; đăng ký tạo tài khoản mới (kiểm tra
+  luật tên, mật khẩu, tên trùng) và ghi \texttt{users.json} nguyên tử; \texttt{users.json} chỉ lưu \texttt{sha256(salt $\|$ pass)};
   \fname{Registry} (RWMutex) tra session theo tên và theo \texttt{conn\_id}, từ chối đăng nhập trùng ngay trong
   lúc giữ khóa; mỗi session giữ địa chỉ TCP lúc handshake và IP:port UDP thật (log và hiện trong danh sách user); server ghi đè \texttt{From} nên không giả danh được; danh sách online phát lại cho mọi người khi có
   người vào/ra & \cref{sec:kien-truc}, \cref{sec:bao-mat} \\
@@ -86,7 +87,8 @@ transport.
   & \cref{subsec:song-chet}, \cref{subsec:state} \\
   8 & Bảo mật & ECDH X25519 + AES-256-GCM, header là AAD, nonce không bao giờ lặp & \cref{sec:bao-mat} \\
   9 & Giao diện HTTP + JS thuần & HTTP/1.1 tự viết trên \fname{net.Listen} (đọc request line, header,
-  \texttt{Content-Length}); trang HTML + JavaScript thuần poll \texttt{/api/events?since=N}: tin nhắn theo tab,
+  \texttt{Content-Length}); trang HTML + JavaScript thuần: trang đăng nhập / đăng ký, nút đăng xuất; poll
+  \texttt{/api/events?since=N}: tin nhắn theo tab,
   danh sách user kèm IP:port, thanh tiến trình file ở cả bên gửi và bên nhận, thanh trạng thái mạng (RTT, cwnd,
   mất gói); upload file bằng \texttt{POST} thân thô; file tĩnh nhúng vào binary bằng \texttt{embed} & \cref{sec:kien-truc} \\
   10 & Test, chất lượng code & \fname{go vet}, \fname{go test -race}; test đơn vị protocol/transport; test

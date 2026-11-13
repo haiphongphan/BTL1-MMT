@@ -73,9 +73,15 @@ máy dò cùng lúc được. \fname{client/core} giữ \fname{Endpoint} hiện 
 các stream nhận được, sắp lại tin theo \texttt{Seq} và ghi mọi sự kiện (chat, DM, danh sách user, tiến độ file,
 trạng thái kết nối) vào \fname{EventLog} có số thứ tự tăng dần. Khi \texttt{Done()} của kết nối đóng mà không
 phải do người dùng thoát, nó chuyển sang trạng thái \textsc{Reconnecting} và handshake lại (\cref{subsec:state}).
+Một process client đăng nhập, đăng xuất rồi đăng nhập lại (kể cả bằng tài khoản khác) mà không phải khởi động
+lại: \fname{Login} chạy handshake \texttt{AUTH} hoặc \texttt{REGISTER}, \fname{Logout} đóng kết nối (gửi
+\texttt{CLOSE}). Mỗi lần đăng nhập hay đăng xuất tăng một số thế hệ; \fname{listenLoop} và vòng kết nối lại
+của phiên cũ thấy số này đổi thì tự dừng, không tự đăng nhập lại bằng mật khẩu cũ.
 \fname{webui} là HTTP/1.1 tự viết trên \fname{net.Listen}: mỗi kết nối một goroutine, đọc request line, các
 header tới dòng trống, thân qua \texttt{LimitReader(Content-Length)}; không dùng \fname{net/http}. Trang HTML, JS
-và CSS được nhúng vào binary bằng \texttt{embed}. Trình duyệt poll \texttt{/api/events?since=N} mỗi 400 ms và
+và CSS được nhúng vào binary bằng \texttt{embed}. Chạy client không có \texttt{-user} thì trang đầu tiên là
+form đăng nhập / đăng ký (\texttt{POST /api/login}, \texttt{/api/register}); ô Server điền sẵn giá trị cờ
+\texttt{-server} và nhận \texttt{auto}. Sau khi đăng nhập, trình duyệt poll \texttt{/api/events?since=N} mỗi 400 ms và
 \texttt{/api/status} mỗi 1 s (địa chỉ server, RTT, cwnd, in-flight, tỉ lệ mất gói lấy từ \fname{transport.Stats}); vì sự kiện
 có số thứ tự, mở nhiều tab hay tải lại trang không làm mất hay trùng tin. Upload gửi thẳng nội dung file làm
 thân \texttt{POST /api/upload?to=\&name=}; \fname{webui} ghi ra file tạm rồi gọi \fname{SendFile} trong goroutine

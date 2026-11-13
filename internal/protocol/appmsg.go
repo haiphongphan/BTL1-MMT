@@ -32,10 +32,11 @@ type KeyX struct {
 	UDPPort   int    `json:"udp_port"` // cổng UDP của server (mặc định 9001)
 }
 
-// Auth mang thông tin đăng nhập: Sealed = AES-GCM(k_tcp, Nonce, JSON {user, pass}).
-// Mật khẩu không bao giờ đi rõ trên mạng, kể cả trên kết nối TCP.
+// Auth mang thông tin đăng nhập hoặc đăng ký: Sealed = AES-GCM(k_tcp, Nonce, JSON {user, pass}).
+// Mật khẩu không bao giờ đi rõ trên mạng, kể cả trên kết nối TCP. Type "REGISTER" bảo server tạo tài khoản
+// mới rồi đăng nhập luôn; kết quả trả về như AUTH (AUTH_OK hoặc AUTH_FAIL kèm lý do).
 type Auth struct {
-	Type   string `json:"type"`  // "AUTH"
+	Type   string `json:"type"`  // "AUTH" hoặc "REGISTER"
 	Nonce  []byte `json:"nonce"` // 12 byte ngẫu nhiên
 	Sealed []byte `json:"sealed"`
 }

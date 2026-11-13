@@ -105,7 +105,7 @@ gọn, xong thì đóng. Mọi thứ sau đó đi UDP.
 ```
 cmd/
   server/main.go        đọc cờ, mở UDP, bật discovery, nghe TCP
-  client/main.go        đọc cờ, đăng nhập, bật Web UI, vòng lặp CLI
+  client/main.go        đọc cờ, đăng nhập bằng cờ -user (nếu có), bật Web UI, vòng lặp CLI
 internal/
   protocol/             ĐỊNH DẠNG BYTE (không có logic mạng)
     packet.go           header 12 byte, các hằng số kích thước
@@ -127,18 +127,18 @@ internal/
     fake.go             FakeEndpoint cho test
     cclog.go            ghi cwnd ra CSV để vẽ đồ thị
   server/
-    auth.go             Server, handshake TCP, kiểm tra mật khẩu
+    auth.go             Server, handshake TCP, kiểm tra mật khẩu, đăng ký (ghi users.json)
     registry.go         bảng user online (Session)
     router.go           mỗi session: writeLoop + serveSession, định tuyến chat/dm
     files.go            chuyển tiếp (relay) file
     discovery.go        broadcast UDP 9002
   client/
-    core.go             Client: đăng nhập, listenLoop, reconnect, gửi tin
+    core.go             Client: Login/Logout, listenLoop, reconnect, gửi tin
     files.go            gửi file (2 lượt đọc), nhận file (ghi đĩa + kiểm SHA-256)
     event.go            EventLog: hàng sự kiện cho CLI/Web UI đọc
   webui/
     httpserver.go       HTTP/1.1 tự viết (không dùng net/http)
-    api.go              /api/events, /api/status, /api/send, /api/upload
+    api.go              /api/login, /api/register, /api/logout, /api/events, /api/status, /api/send, /api/upload
     static/             index.html, app.js, style.css (nhúng bằng go:embed)
 scripts/plotcc          vẽ đồ thị cwnd từ CSV ra SVG
 users.json              tài khoản: salt + sha256(salt+password)
@@ -176,7 +176,8 @@ Client                                              Server (goroutine handleHand
   (2 bên ra CÙNG kTCP, kUDP mà khóa chưa từng đi trên mạng)
   nonce = 12 byte ngẫu nhiên
   ── AUTH {nonce, AES-GCM(kTCP, {user,pass})} ────►  aead.Open → {user, pass}
-                                                     checkPassword: sha256(salt+pass) == hash ?
+     (hoặc REGISTER, cùng định dạng)                 REGISTER: register() kiểm tra luật, thêm, ghi users.json
+                                                     AUTH:     checkPassword: sha256(salt+pass) == hash ?
                                                      reg.AddPending(user, connID, kUDP)  (trùng tên → FAIL)
                                                      mux.Accept(connID, kUDP) → Conn phía server
                                                      AttachEndpoint → chạy writeLoop + serveSession
@@ -188,6 +189,10 @@ Mỗi message TCP có dạng `[4 byte độ dài big-endian][JSON]` ([wire.go](.
 bị chặn ở 1 MB để kẻ xấu không khai "4 GB" làm server cấp phát hết RAM.
 
 Server đặt `SetDeadline(10s)` cho TCP: client mở kết nối rồi im lặng thì goroutine không bị treo mãi.
+
+**Đăng ký** dùng đúng handshake này, chỉ khác `type: "REGISTER"`. Server kiểm tra tên (3–20 ký tự `[A-Za-z0-9_]`),
+mật khẩu (6–64 ký tự) và tên trùng, rồi thêm tài khoản và **đăng nhập luôn** trong cùng kết nối TCP: không cần thêm
+vòng handshake. Lỗi trả về `AUTH_FAIL` kèm lý do, Web UI hiện nguyên văn.
 
 ### Bước 2. Mở kênh UDP — [client/core.go:109](../internal/client/core.go#L109)
 
@@ -727,7 +732,9 @@ client B (nhận) ghi đĩa chậm
 ```go
 type Server struct {
     reg        *Registry                  // ai đang online
+    usersMu    sync.RWMutex               // đăng nhập đọc, đăng ký ghi (nhiều handshake song song)
     users      map[string]UserAccount     // từ users.json
+    usersPath  string                     // đăng ký ghi lại file này
     nextConnID atomic.Uint32              // 1001, 1002, ...
     udpPort    int
     mux        *transport.Mux
@@ -748,8 +755,10 @@ type Session struct {        // 1 user đang online
 Server **theo dõi IP và cổng của từng user**: log `User 'alice' active: TCP 1.2.3.4:51000, UDP 1.2.3.4:62000` khi
 nhận gói UDP đầu tiên (goroutine `watchPeer`), và gửi kèm `addrs` trong tin `users` để Web UI hiện cạnh tên.
 
-```
-```
+**Đăng ký** (`register` trong [auth.go](../internal/server/auth.go)): giữ `usersMu` khi thêm tài khoản và ghi file,
+nên hai người đăng ký cùng lúc không ghi đè nhau. File được ghi ra file tạm cùng thư mục rồi `os.Rename` đè lên
+`users.json`: rename là nguyên tử, server tắt giữa chừng cũng không để lại file hỏng. Ghi lỗi thì gỡ tài khoản
+vừa thêm. `checkPassword` so hash bằng `subtle.ConstantTimeCompare`.
 
 **Registry** ([registry.go](../internal/server/registry.go)): 2 map `byName`, `byConnID` + `RWMutex`.
 
@@ -827,27 +836,41 @@ bằng mẹo `net.Dial("udp4", "8.8.8.8:80")` (UDP "dial" không gửi gói nào
 
 ```go
 type Client struct {
-    User        string
     Events      *EventLog     // hàng sự kiện cho UI
     DownloadDir string        // "downloads"
-    mu sync.Mutex             // bảo vệ: online, addrs, ep, closing, state, addr, pass, loss, seq
-    ...
+    Jitter, Loss              // giả lập mạng xấu chiều gửi
+    mu sync.Mutex             // bảo vệ: user, loggedIn, authing, gen, loginSeq, online, addrs, ep,
+    ...                       //         closing, state, addr, pass, seq
 }
 ```
 
-Lưu `addr, pass, loss` để **reconnect tự động** không cần hỏi lại người dùng.
+Lưu `addr, pass` trong RAM để **reconnect tự động** không cần hỏi lại người dùng; `Logout` xóa `pass`.
+
+Một process client có thể **đăng nhập, đăng xuất rồi đăng nhập lại** (kể cả tài khoản khác) mà không khởi động lại:
+
+- `Login(server, user, pass, register)`: chặn gọi song song (`authing`) và gọi khi đang đăng nhập (`ErrLoggedIn`);
+  `server = "auto"` thì `Discover` trước. Lỗi từ server có kiểu `*AuthError{Reason}`.
+- `Logout()` (cũng là `Close()`): gỡ `ep`, đóng kết nối (gửi CLOSE), đặt `disconnected`.
+- `gen` tăng mỗi lần Login/Logout. `listenLoop` và `reconnectLoop` nhớ `gen` lúc bắt đầu; thấy `gen` đổi thì dừng.
+  Không có cơ chế này, `reconnectLoop` của phiên cũ sẽ tự đăng nhập lại bằng mật khẩu cũ sau khi người dùng đã đăng xuất.
+- `loginSeq` = seq cuối của `EventLog` lúc bắt đầu phiên; `/api/status` trả về dạng `since` để Web UI chỉ hiện event
+  của phiên hiện tại.
 
 ### 8.2 Kết nối và vòng nhận
 
-- `Connect` → `dial()`: `ConnectTCPAndAuth` → `ListenUDP` → `transport.Dial` → `AttachEndpoint` (gán ep + `go listenLoop`).
+- `Connect(addr, pass, loss)` = `Login` với user truyền vào `NewClient` (cờ `-user`, test).
+- `Login` → `dial(gen, register)`: `handshake` (AUTH hoặc REGISTER) → `ListenUDP` → `transport.Dial` → `attach`
+  (gán ep + `go listenLoop`, bỏ nếu `gen` đã đổi).
 - **`listenLoop`** ([core.go:215](../internal/client/core.go#L215)): giống `serveSession` của server — map stream,
   byte đầu quyết định loại. Message gom tới FIN rồi `handleMessage`; file thì `onFileData` ghi thẳng xuống đĩa.
   - `defer`: file nào đang nhận dở thì `abort()` (xóa file chưa hoàn chỉnh).
-  - `Done()`: nếu user chủ động đóng → `disconnected`; nếu không → `reconnecting` + `go reconnectLoop()`.
+  - `Done()`: nếu `ep` vẫn là kết nối của phiên hiện tại → `reconnecting` + `go reconnectLoop(gen)`; nếu `Logout`
+    đã gỡ nó thì thoát im lặng.
 - **`handleMessage`**: qua `SeqBuffer` của kết nối (sắp theo `Seq` server đánh); `users` → cập nhật danh sách
   online + địa chỉ; mọi loại → `Events.Add(type, msg)`.
 - **`send`**: lấy `ep` và cấp `Seq` (đếm theo kết nối, về 0 khi kết nối lại) trong cùng một lần khóa.
-- **`reconnectLoop`**: chờ 1 s, thử `dial()`, thất bại thì nhân đôi (tối đa 30 s). Mỗi lần là handshake mới hoàn toàn.
+- **`reconnectLoop`**: chờ 1 s, thử `dial(gen, false)` (luôn là AUTH), thất bại thì nhân đôi (tối đa 30 s). Mỗi lần
+  là handshake mới hoàn toàn. Dừng khi `gen` đổi.
 
 ### 8.3 Gửi file 2 lượt — [client/files.go:32](../internal/client/files.go#L32)
 
@@ -877,8 +900,12 @@ giữa 2 lần poll. (`Event.Seq` này **khác** `AppMsg.Seq` của giao thức.
 
 ### 8.6 CLI — [cmd/client/main.go](../cmd/client/main.go)
 
-`/msg <text>`, `/dm <user> <text>`, `/file <path> [user]`, `/users`, `/quit`; gõ thẳng = chat. Một goroutine
-in event ra console mỗi 200 ms.
+`/msg <text>`, `/dm <user> <text>`, `/file <path> [user]`, `/users`, `/quit`; gõ thẳng = chat;
+`/login <user> <pass>`, `/register <user> <pass>`, `/logout`. Một goroutine in event ra console mỗi 200 ms.
+
+Có `-user` thì đăng nhập ngay lúc khởi động (thêm `-register` để đăng ký), lỗi thì thoát: dùng cho CLI, bot và
+`scripts/run_clients.sh`. Không có `-user` thì client chỉ mở Web UI và chờ người dùng đăng nhập trên trang web;
+chạy không Web UI hoặc chế độ bot mà thiếu `-user` thì báo lỗi.
 
 ---
 
@@ -892,13 +919,18 @@ in event ra console mỗi 200 ms.
 
 | Endpoint | Làm gì |
 |---|---|
+| `POST /api/login {server,user,pass}` | `Login(..., false)`; trả `{ok}`, hoặc `{error}` với 401 (lý do của server), 409 (đang đăng nhập), 502 (không tới được server) |
+| `POST /api/register {server,user,pass}` | `Login(..., true)`: đăng ký rồi đăng nhập luôn |
+| `POST /api/logout` | `Logout()` |
 | `GET /api/events?since=N` | `Events.Since(N)` |
-| `GET /api/status` | user, state, server, online + addrs, RTT, cwnd, in-flight, sent/lost, loss% |
+| `GET /api/status` | logged_in, since, user, state, server, online + addrs, RTT, cwnd, in-flight, sent/lost, loss% |
 | `POST /api/send {to,text}` | `to` rỗng → chat, có → DM |
 | `POST /api/upload?name=&to=` | body là file thô → lưu file tạm → `go SendFile` → xóa thư mục tạm |
 
-- [app.js](../internal/webui/static/app.js): poll events mỗi 400 ms, status mỗi 1 s; tab "Chung" + mỗi người DM 1 tab;
-  `esc()` escape HTML chống XSS khi hiển thị tin.
+- [app.js](../internal/webui/static/app.js): poll status mỗi 1 s. `logged_in = false` → hiện **trang đăng nhập / đăng ký**
+  (ô Server điền sẵn giá trị cờ `-server`; trang đăng ký kiểm tra sơ bộ luật tên, mật khẩu và ô nhập lại, server vẫn
+  kiểm tra lại). Đã đăng nhập → hiện ứng dụng, đọc event từ `since` của phiên, poll mỗi 400 ms; tab "Chung" + mỗi
+  người DM 1 tab; nút **Đăng xuất** trên thanh trạng thái. `esc()` escape HTML chống XSS khi hiển thị tin.
 
 ---
 
@@ -957,6 +989,9 @@ in event ra console mỗi 200 ms.
 | Client kill -9 | server idle timeout 10 s → `dropSession` → mọi người nhận danh sách user mới |
 | Server kill -9 | client idle timeout 10 s → `reconnecting` → thử lại 1, 2, 4... 30 s |
 | Đăng nhập 2 nơi cùng tên | `AddPending` → `AUTH_FAIL "Tài khoản đang online ở máy khác"` |
+| Đăng ký tên đã có / tên sai luật | `register` → `AUTH_FAIL` kèm lý do, không ghi file |
+| 2 người đăng ký cùng lúc | `usersMu` khóa ghi; file ghi tạm rồi `Rename` (nguyên tử) |
+| Đăng xuất khi đang kết nối lại | `gen` đổi → `reconnectLoop` cũ dừng, không tự đăng nhập lại |
 | Client gửi `from: "admin"` | server ghi đè `From` = tên session |
 | Tên file `../../x` | `safeName` → `x` |
 | File hỏng trên đường | SHA-256 không khớp → xóa file, báo lỗi |
@@ -977,6 +1012,10 @@ client chưa nghe discovery, thanh tiến trình bên gửi không chạy, cờ 
 2. `packet_num` là `uint32`, không xử lý tràn số (≈4,3 tỉ gói/kết nối, ~5 TB dữ liệu) — tràn sẽ trùng nonce. Thực tế không chạm tới.
 3. Không xác thực server (không chứng chỉ) → có thể bị MITM khi trao khóa; KDF dùng SHA256 thay vì HKDF; hash mật khẩu 1 vòng.
 4. `bytesInFlight` tính byte **cả gói** (có header, tag) còn `peerWindow` là byte **data** → flow control xấp xỉ, hơi bảo thủ.
+5. Đăng ký không giới hạn số lần (không có rate limit hay captcha), và báo "tên đã tồn tại" nên lộ tên nào đã có.
+   Đăng nhập thì vẫn trả cùng một lý do cho user lạ và sai mật khẩu.
+6. Web UI chỉ nghe `127.0.0.1` nhưng không kiểm tra `Origin`: một trang web độc hại mở trên cùng máy có thể gửi POST
+   tới API local (CSRF).
 
 ---
 

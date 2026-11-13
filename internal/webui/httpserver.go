@@ -134,7 +134,8 @@ func readLine(r *bufio.Reader) (string, error) {
 }
 
 var statusText = map[int]string{
-	200: "OK", 400: "Bad Request", 404: "Not Found", 405: "Method Not Allowed", 500: "Internal Server Error",
+	200: "OK", 400: "Bad Request", 401: "Unauthorized", 404: "Not Found", 405: "Method Not Allowed",
+	409: "Conflict", 500: "Internal Server Error", 502: "Bad Gateway",
 }
 
 // writeResponse ghi status line, header và body theo HTTP/1.1.

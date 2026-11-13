@@ -107,10 +107,15 @@ Phía server có 7 test tích hợp (\fname{internal/server/router\_test.go}) ch
 (\fname{transport.FakePair}): broadcast 20 tin đúng thứ tự và \texttt{From} bị ghi đè; DM tới user offline trả
 \texttt{error}; file 300 KB đi qua server với header bị cắt làm hai mảnh; file tới user offline; client chết thì
 danh sách user được phát lại và registry sạch; đăng nhập trùng bị từ chối; tin tới với \texttt{Seq} 2, 3, 1 được
-giao 1, 2, 3 và server đánh lại \texttt{Seq} liên tiếp cho người nhận. Test hệ thống
+giao 1, 2, 3 và server đánh lại \texttt{Seq} liên tiếp cho người nhận. \fname{TestRegisterValidatesAndPersists}
+cho 20 goroutine đăng ký cùng lúc, kiểm tra luật tên, mật khẩu, tên trùng, rồi đọc lại \texttt{users.json} bằng
+một server mới và đăng nhập được. Test hệ thống
 \fname{internal/client/e2e\_test.go} chạy server thật và hai client thật qua UDP localhost với loss 10\% mỗi
 chiều: chat tới đúng người, file 5 MB đúng SHA-256, DM gửi giữa lúc truyền file vẫn tới ngay, client đóng thì
-người kia thấy danh sách cập nhật. Tất cả chạy trong \texttt{go test -race ./...}.
+người kia thấy danh sách cập nhật. \fname{TestRegisterLoginLogout} dùng một client duy nhất như Web UI: đăng ký
+sai luật bị từ chối với lý do đúng, đăng ký đúng thì online ngay, đăng xuất thì người khác thấy sau
+$\approx$ 20 ms, sau 2,5 s client không tự đăng nhập lại, và server khởi động lại từ file vẫn nhận tài khoản mới.
+Tất cả chạy trong \texttt{go test -race ./...}.
 
 Bảng dưới là các kịch bản chạy bằng binary thật (server, client với Web UI, gọi qua \texttt{/api}) trên macOS
 (Apple Silicon), Go 1.27, loopback, mỗi bên \texttt{-loss 0.1} trừ khi ghi khác; đo ngày 13/11/2026.
@@ -156,9 +161,15 @@ không bị chặn, chỉ người nhận đó bị ngắt.
   UDP không đọc được (\cref{sec:bao-mat}) \\
   11 & Tự tìm server: 3 client trên cùng máy chạy \texttt{-server auto} đồng thời & Cả 3 tìm thấy server sau
   $\approx$ 40 ms, đúng cổng TCP server đang dùng (không phải giá trị mặc định) \\
+  12 & Trang đăng nhập / đăng ký trên Chrome: đăng ký, nhận chat, tải lại trang, đăng xuất, đăng nhập lại &
+  Mật khẩu nhập lại không khớp và tên đã tồn tại hiện lỗi dưới form; đăng ký đúng thì vào thẳng phòng chat, server
+  ghi tài khoản vào \texttt{users.json}; tải lại trang vẫn thấy tin của phiên; đăng xuất về trang đăng nhập,
+  người khác thấy danh sách cập nhật ngay; sai mật khẩu bị từ chối; đăng nhập lại thì giao diện trống, không lộ
+  tin của phiên trước; không có lỗi JavaScript. Tắt rồi bật lại server: client đăng nhập trên web tự kết nối lại \\
   \bottomrule
 \end{longtable}
 
 Kịch bản 1--8 được tự động hóa bằng một script gọi \texttt{/api/send}, \texttt{/api/upload},
 \texttt{/api/events} của Web UI, nên lặp lại được sau mỗi lần sửa code; kịch bản 9 dùng
-\fname{scripts/run\_clients.sh}.
+\fname{scripts/run\_clients.sh}; kịch bản 12 điều khiển Chrome headless qua Chrome DevTools Protocol (điền form,
+bấm nút, đọc DOM, chụp màn hình).

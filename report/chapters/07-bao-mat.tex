@@ -46,12 +46,15 @@ trùng dữ liệu: \texttt{packet\_num} đã thấy thì không xử lý lại 
 
 \subsection{Phía ứng dụng}
 \paragraph{Lưu mật khẩu.} \texttt{users.json} không chứa mật khẩu mà chứa, cho từng user, một \texttt{salt} ngẫu
-nhiên 8 byte và \texttt{sha256(salt $\|$ password)} (tạo bằng \fname{cmd/mkusers}). Khi đăng nhập server băm lại
-rồi so sánh, nên lộ file không lộ mật khẩu, và hai user cùng mật khẩu vẫn có hash khác nhau. Hạn chế: SHA-256
+nhiên 8 byte và \texttt{sha256(salt $\|$ password)} (tạo bằng \fname{cmd/mkusers}, hoặc do server tạo khi người dùng
+đăng ký). Khi đăng nhập server băm lại rồi so sánh bằng phép so thời gian hằng (\fname{subtle.ConstantTimeCompare}),
+nên lộ file không lộ mật khẩu, và hai user cùng mật khẩu vẫn có hash khác nhau. Hạn chế: SHA-256
 đơn thuần tính rất nhanh nên yếu trước brute-force ngoại tuyến; bản thực tế nên dùng bcrypt hoặc Argon2. Mật
-khẩu chỉ đi trên dây bên trong trường \texttt{sealed} của message \texttt{AUTH}, đã mã hóa bằng $k_\text{tcp}$;
-server trả cùng một lý do ``tài khoản hoặc mật khẩu không chính xác'' cho cả user lạ lẫn sai mật khẩu để không
-tiết lộ user nào tồn tại.
+khẩu chỉ đi trên dây bên trong trường \texttt{sealed} của message \texttt{AUTH} hoặc \texttt{REGISTER}, đã mã
+hóa bằng $k_\text{tcp}$; khi đăng nhập, server trả cùng một lý do ``tài khoản hoặc mật khẩu không chính xác'' cho
+cả user lạ lẫn sai mật khẩu để không tiết lộ user nào tồn tại. Đăng ký thì buộc phải báo ``tên đã tồn tại'', nên
+về nguyên tắc vẫn dò được tên; hệ thống cũng chưa giới hạn số lần đăng ký. Web UI chỉ lắng nghe trên
+\texttt{127.0.0.1} và chỉ giữ mật khẩu trong RAM của process client để kết nối lại; đăng xuất thì xóa.
 
 \paragraph{Chống giả danh.} Sau khi đăng nhập, danh tính của một kết nối là username đã xác thực gắn với
 \texttt{conn\_id}. Mọi tin chat/DM từ kết nối đó đều được server \emph{ghi đè} trường \texttt{From} bằng username

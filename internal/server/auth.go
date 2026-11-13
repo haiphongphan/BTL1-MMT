@@ -1,12 +1,18 @@
 package server
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"log"
 	"net"
 	"os"
+	"path/filepath"
+	"regexp"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -24,11 +30,29 @@ type UserAccount struct {
 // (một socket UDP chung cho mọi client, tách gói theo conn_id).
 type Server struct {
 	reg        *Registry
+	usersMu    sync.RWMutex // nhiều handshake chạy song song: đăng nhập đọc, đăng ký ghi
 	users      map[string]UserAccount
+	usersPath  string // file users.json; rỗng (trong test) thì đăng ký chỉ lưu trong RAM
 	nextConnID atomic.Uint32
 	udpPort    int
 	mux        *transport.Mux
 }
+
+// Luật cho tài khoản mới. Tên chỉ gồm chữ không dấu, số và '_' để hiển thị và ghi log an toàn.
+var usernameRe = regexp.MustCompile(`^[A-Za-z0-9_]{3,20}$`)
+
+const (
+	minPassLen = 6
+	maxPassLen = 64
+)
+
+// Lý do AUTH_FAIL khi đăng ký; client hiện nguyên văn lên trang đăng ký.
+var (
+	errBadUsername = errors.New("Tên đăng nhập phải dài 3–20 ký tự, chỉ gồm chữ không dấu, số và dấu _")
+	errBadPassword = errors.New("Mật khẩu phải dài 6–64 ký tự")
+	errUserExists  = errors.New("Tên đăng nhập đã tồn tại")
+	errSaveUsers   = errors.New("Server không lưu được tài khoản, thử lại sau")
+)
 
 // NewServer đọc users.json và tạo server (chưa mở socket nào).
 func NewServer(usersFilePath string, udpPort int) (*Server, error) {
@@ -41,10 +65,14 @@ func NewServer(usersFilePath string, udpPort int) (*Server, error) {
 		return nil, err
 	}
 
+	if users == nil { // file chứa "null" hoặc "{}" rỗng vẫn đăng ký được
+		users = map[string]UserAccount{}
+	}
 	srv := &Server{
-		reg:     NewRegistry(),
-		users:   users,
-		udpPort: udpPort,
+		reg:       NewRegistry(),
+		users:     users,
+		usersPath: usersFilePath,
+		udpPort:   udpPort,
 	}
 	srv.nextConnID.Store(1000) // conn_id bắt đầu từ 1001
 	return srv, nil
@@ -85,7 +113,8 @@ func (s *Server) ListenTCP(addr string) error {
 	}
 }
 
-// handleHandshake chạy HELLO → KEYX → AUTH → AUTH_OK/AUTH_FAIL trên một kết nối TCP (docs/protocol.md 3.2).
+// handleHandshake chạy HELLO → KEYX → AUTH|REGISTER → AUTH_OK/AUTH_FAIL trên một kết nối TCP
+// (docs/protocol.md 3.2). REGISTER giống hệt AUTH nhưng server tạo tài khoản trước rồi đăng nhập luôn.
 // Thành công thì tạo kết nối transport cho conn_id mới và đóng TCP; mọi dữ liệu sau đó đi qua UDP.
 func (s *Server) handleHandshake(c net.Conn) {
 	defer c.Close()
@@ -122,7 +151,7 @@ func (s *Server) handleHandshake(c net.Conn) {
 		return
 	}
 
-	// 3. AUTH: {user, pass} đã mã hóa AES-GCM bằng k_tcp
+	// 3. AUTH hoặc REGISTER: {user, pass} đã mã hóa AES-GCM bằng k_tcp
 	var auth protocol.Auth
 	if err := protocol.ReadMsg(c, &auth); err != nil {
 		return
@@ -144,10 +173,22 @@ func (s *Server) handleHandshake(c net.Conn) {
 		return
 	}
 
-	// 4. Kiểm tra mật khẩu và đăng nhập trùng. User lạ và sai mật khẩu trả cùng một lý do để không lộ
-	// user nào tồn tại.
-	if !s.checkPassword(cred.User, cred.Pass) {
-		protocol.WriteMsg(c, protocol.AuthResult{Type: "AUTH_FAIL", Reason: "Tài khoản hoặc mật khẩu không chính xác"})
+	// 4. Đăng ký (nếu là REGISTER), kiểm tra mật khẩu và đăng nhập trùng. Khi đăng nhập, user lạ và sai
+	// mật khẩu trả cùng một lý do để không lộ user nào tồn tại.
+	switch auth.Type {
+	case "REGISTER":
+		if err := s.register(cred.User, cred.Pass); err != nil {
+			protocol.WriteMsg(c, protocol.AuthResult{Type: "AUTH_FAIL", Reason: err.Error()})
+			return
+		}
+		log.Printf("[Server] Registered new user '%s' from %s", cred.User, c.RemoteAddr())
+	case "AUTH":
+		if !s.checkPassword(cred.User, cred.Pass) {
+			protocol.WriteMsg(c, protocol.AuthResult{Type: "AUTH_FAIL", Reason: "Tài khoản hoặc mật khẩu không chính xác"})
+			return
+		}
+	default:
+		protocol.WriteMsg(c, protocol.AuthResult{Type: "AUTH_FAIL", Reason: "Loại yêu cầu không hợp lệ"})
 		return
 	}
 	sess, err := s.reg.AddPending(cred.User, connID, c.RemoteAddr().String())
@@ -182,12 +223,73 @@ func (s *Server) Close() {
 	}
 }
 
-// checkPassword so sha256(salt ‖ password) với hash đã lưu.
+// checkPassword so sha256(salt ‖ password) với hash đã lưu (so sánh thời gian hằng).
 func (s *Server) checkPassword(username, password string) bool {
+	s.usersMu.RLock()
 	acc, ok := s.users[username]
+	s.usersMu.RUnlock()
 	if !ok {
 		return false
 	}
 	h := sha256.Sum256([]byte(acc.Salt + password))
-	return hex.EncodeToString(h[:]) == acc.Hash
+	return subtle.ConstantTimeCompare([]byte(hex.EncodeToString(h[:])), []byte(acc.Hash)) == 1
+}
+
+// newAccount tạo salt ngẫu nhiên 8 byte và hash = hex(sha256(salt ‖ password)), cùng định dạng cmd/mkusers.
+func newAccount(password string) UserAccount {
+	salt := make([]byte, 8)
+	rand.Read(salt)
+	s := hex.EncodeToString(salt)
+	h := sha256.Sum256([]byte(s + password))
+	return UserAccount{Salt: s, Hash: hex.EncodeToString(h[:])}
+}
+
+// register kiểm tra tên và mật khẩu, thêm tài khoản rồi ghi lại users.json. Giữ khóa ghi trong lúc ghi file
+// để hai người đăng ký cùng lúc không ghi đè nhau. Ghi file lỗi thì bỏ tài khoản vừa thêm.
+func (s *Server) register(username, password string) error {
+	if !usernameRe.MatchString(username) {
+		return errBadUsername
+	}
+	if len(password) < minPassLen || len(password) > maxPassLen {
+		return errBadPassword
+	}
+	acc := newAccount(password)
+
+	s.usersMu.Lock()
+	defer s.usersMu.Unlock()
+	if _, ok := s.users[username]; ok {
+		return errUserExists
+	}
+	s.users[username] = acc
+	if err := s.saveUsersLocked(); err != nil {
+		delete(s.users, username)
+		log.Printf("[Server] Ghi %s thất bại: %v", s.usersPath, err)
+		return errSaveUsers
+	}
+	return nil
+}
+
+// saveUsersLocked ghi users.json ra file tạm cùng thư mục rồi rename đè lên file cũ. Rename là thao tác
+// nguyên tử nên server bị tắt giữa chừng cũng không để lại users.json hỏng. Gọi khi đang giữ usersMu.
+func (s *Server) saveUsersLocked() error {
+	if s.usersPath == "" {
+		return nil
+	}
+	b, err := json.MarshalIndent(s.users, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(s.usersPath), ".users-*.json")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name()) // rename thành công thì file tạm không còn, Remove chỉ trả lỗi bị bỏ qua
+	if _, err := tmp.Write(b); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), s.usersPath)
 }

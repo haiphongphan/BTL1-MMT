@@ -81,6 +81,13 @@
   \item \textbf{Cờ giả lập mạng ``chạy'' mà không có tác dụng.} \texttt{-jitter} được nhận nhưng không gán vào
         \fname{LossyConn}; phát hiện khi RTT đo được vẫn 0,1 ms. Bài học giống thử thách~\ref{tt:jitter}: luôn
         kiểm tra bộ giả lập bằng số đo (RTT, tỉ lệ mất) trước khi tin kết quả.
+  \item \textbf{Đăng xuất xong vẫn bị đăng nhập lại.} Khi thêm trang đăng nhập, một process client phải đăng
+        nhập, đăng xuất rồi đăng nhập lại nhiều lần. Vòng kết nối lại chỉ hỏi ``người dùng đã thoát chưa'', nên
+        nếu đăng xuất đúng lúc nó đang chờ backoff, rồi đăng nhập tài khoản khác, nó tỉnh dậy và mở thêm một kết
+        nối bằng mật khẩu cũ. \emph{Giải pháp:} một số thế hệ tăng mỗi lần đăng nhập hoặc đăng xuất;
+        \fname{listenLoop}, vòng kết nối lại và cả bước gắn kết nối mới đều so số của mình với số hiện tại và
+        tự dừng khi khác. Test \fname{TestRegisterLoginLogout} kiểm tra 2,5 s sau khi đăng xuất client vẫn ở
+        trạng thái đã đăng xuất.
   \item \textbf{Web UI không có \fname{net/http}.} Phải tự đọc request line và header, xử lý
         \texttt{Content-Length} cho cả JSON nhỏ lẫn file hàng trăm MB (thân đọc thẳng ra file tạm, không vào
         RAM), và trả \texttt{Connection: close} để không phải cài keep-alive. Trình duyệt không được server dội

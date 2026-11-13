@@ -41,6 +41,11 @@ Hai điểm đáng chú ý. Thứ nhất, server không chờ gói UDP đầu ti
 trong \texttt{AUTH\_OK} chỉ là ảnh chụp lúc đó; danh sách chính thức luôn đi qua kênh UDP bằng tin
 \texttt{users}, được phát cho mọi người mỗi khi có ai vào hoặc ra.
 
+Đăng ký (tab Đăng ký trên Web UI, \texttt{/register} trong CLI hoặc cờ \texttt{-register}) có cùng sơ đồ, chỉ
+khác message thứ ba là \texttt{REGISTER}: trước khi tới \fname{AddPending}, server kiểm tra luật tên và mật khẩu,
+từ chối tên đã có, thêm tài khoản với salt mới và ghi lại \texttt{users.json}
+(\cref{subsec:handshake}).
+
 \subsection{Một tin nhắn riêng}
 \begin{figure}[H]
   \centering

@@ -38,7 +38,7 @@ khai, nếu không giới hạn thì kẻ xấu chỉ cần gửi độ dài 4 G
     1 & C $\to$ S & \texttt{HELLO} & \texttt{client\_pub}: khóa công khai X25519 (tạm, mỗi phiên một khóa) \\
     2 & S $\to$ C & \texttt{KEYX} & \texttt{server\_pub}, \texttt{conn\_id} (định danh kết nối UDP),
     \texttt{udp\_port} \\
-    3 & C $\to$ S & \texttt{AUTH} & \texttt{nonce} 12 byte ngẫu nhiên, \texttt{sealed} =
+    3 & C $\to$ S & \texttt{AUTH} hoặc \texttt{REGISTER} & \texttt{nonce} 12 byte ngẫu nhiên, \texttt{sealed} =
     AES-GCM$_{k_\text{tcp}}$(\{user, pass\}) \\
     4 & S $\to$ C & \texttt{AUTH\_OK} / \texttt{AUTH\_FAIL} & danh sách user online / lý do từ chối \\
     \bottomrule
@@ -56,6 +56,14 @@ Sau bước 2, hai bên tự tính cùng một bí mật chung mà không ai g�
 Dùng hai khóa riêng để hai kênh có cách sinh nonce khác nhau (TCP: nonce ngẫu nhiên; UDP: nonce từ header) không
 bao giờ dùng chung một khóa. Sau \texttt{AUTH\_OK}, kết nối TCP đóng; client gửi gói UDP đầu tiên (PING) mang
 \texttt{conn\_id} để server biết địa chỉ UDP của mình.
+
+\paragraph{Đăng ký.} Tài khoản mới đi qua đúng handshake trên, chỉ đổi \texttt{type} của message 3 thành
+\texttt{REGISTER}; mật khẩu vẫn nằm trong \texttt{sealed}. Server kiểm tra tên (3--20 ký tự, chỉ chữ không dấu,
+số và \texttt{\_}), độ dài mật khẩu (6--64) và tên trùng, rồi thêm tài khoản và đăng nhập luôn trên cùng kết nối:
+không cần handshake thứ hai. Lỗi trả \texttt{AUTH\_FAIL} kèm lý do cụ thể để trang đăng ký hiện cho người dùng.
+Tài khoản mới được ghi ra file tạm cùng thư mục rồi đổi tên đè lên \texttt{users.json}; đổi tên là thao tác
+nguyên tử nên server tắt giữa chừng không để lại file hỏng, và một khóa ghi bảo đảm hai người đăng ký cùng lúc
+không ghi đè nhau. Kết nối lại tự động luôn dùng \texttt{AUTH}.
 
 \subsection{Gói UDP}
 \label{subsec:goi}
@@ -201,8 +209,11 @@ kiểm tra người nhận thấy 1, 2, 3 với \texttt{Seq} liên tiếp do ser
 \label{subsec:state}
 Client đi qua các trạng thái ở \cref{fig:state}; trạng thái của riêng kết nối transport
 (\texttt{waiting}/\texttt{connected}/\texttt{closed}) nằm trong \fname{transport.Stats.State} và được Web UI
-hiển thị cùng RTT, cwnd. Trạng thái \textsc{Discovering} chỉ có khi chạy \texttt{-server auto}; nếu chỉ định
-địa chỉ bằng \texttt{-server ip:port} thì client vào thẳng \textsc{Handshaking}.
+hiển thị cùng RTT, cwnd. Trạng thái \textsc{Discovering} chỉ có khi server là \texttt{auto}; nếu chỉ định
+địa chỉ \texttt{ip:port} thì client vào thẳng \textsc{Handshaking}. Client chạy không có \texttt{-user} bắt đầu ở
+\textsc{Logged out}: Web UI hiện trang đăng nhập / đăng ký. Lần đăng nhập đầu thất bại thì quay về
+\textsc{Logged out} và hiện lý do (khi chạy bằng cờ \texttt{-user} thì process thoát). Đăng xuất từ
+\textsc{Connected} hoặc \textsc{Reconnecting} cũng về \textsc{Logged out}.
 
 \begin{figure}[H]
   \centering
@@ -215,6 +226,10 @@ hiển thị cùng RTT, cwnd. Trạng thái \textsc{Discovering} chỉ có khi c
     \node[st, right=of hs] (co) {\textsc{Connected}\\UDP, Web UI hoạt động};
     \node[st, right=of co] (cl) {\textsc{Closed}};
     \node[st, below=of hs] (re) {\textsc{Reconnecting}\\chờ 1, 2, 4\dots{} tối đa 30 s};
+    \node[st, above=of di] (lo) {\textsc{Logged out}\\trang đăng nhập / đăng ký};
+    \draw[ar] (lo) -- node[lab, left] {server\\\texttt{auto}} (di);
+    \draw[ar] (lo.south east) -- node[lab, sloped, above] {Đăng nhập / Đăng ký} (hs.north west);
+    \draw[ar] (co.north) |- node[lab, pos=0.75, above] {Đăng xuất} (lo.east);
     \draw[ar] (di) -- node[lab, above] {nghe được\\\texttt{COLLAB\_SERVER}} (hs);
     \draw[ar] (hs) -- node[lab, above] {AUTH\_OK, \fname{Dial} UDP,\\gửi PING đầu} (co);
     \draw[ar] (co) -- node[lab, above] {Ctrl+C, \texttt{/quit}:\\gửi CLOSE} (cl);
