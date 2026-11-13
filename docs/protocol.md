@@ -4,7 +4,7 @@
 |---|---|---|
 | 9000 | TCP | Handshake, trao khóa, đăng nhập (đóng sau khi xong) |
 | 9001 | UDP | Toàn bộ dữ liệu: message, file, ACK, heartbeat |
-| 9002 | UDP broadcast | Server quảng bá `"COLLAB_SERVER <ip> 9000 9001"` mỗi 2s |
+| 9002 | UDP broadcast | Server quảng bá `"COLLAB_SERVER <ip> <tcp_port> <udp_port>"` mỗi 2s; client `-server auto` nghe cổng này để tự tìm server (lấy IP từ địa chỉ nguồn của gói) |
 | 8080+ | TCP (HTTP tự viết) | Web UI của từng client, chỉ bind `127.0.0.1` |
 
 ### 3.2 Handshake TCP (mỗi message: `[4 byte độ dài][JSON]`)
@@ -133,6 +133,7 @@ type AppMsg struct {
 	To    string   `json:"to,omitempty"`
 	Text  string   `json:"text,omitempty"`
 	Users []string `json:"users,omitempty"`
+	Addrs map[string]string `json:"addrs,omitempty"` // kèm "users": user → "ip:port" UDP server đang dùng
 	TS    int64    `json:"ts"`              // UnixMilli
 	Seq   uint64   `json:"seq,omitempty"`   // số thứ tự theo kết nối, xem dưới
 }
@@ -158,7 +159,38 @@ tin #2 có thể tới trước tin #1. Để giữ đúng thứ tự mà vẫn 
 - Server **không bỏ tin** khi hàng đợi gửi của 1 người nhận đầy (bỏ tin sẽ để lại lỗ hổng `Seq`): hàng đợi chứa
   4096 tin, đầy thì ngắt client quá chậm đó (client tự kết nối lại).
 
-### 3.6 State diagram của client (B vẽ, đưa vào báo cáo)
+### 3.6 State diagram
+
+**Client** (`client.Status().State`, hiện trên thanh trạng thái Web UI):
+
+```
+                 -server auto
+   ┌─────────────┐  nghe broadcast   ┌──────────────┐   AUTH_OK, Dial UDP,   ┌───────────────┐   Ctrl+C / /quit   ┌────────┐
+   │ DISCOVERING │ ────────────────▶ │ HANDSHAKING  │ ─────────────────────▶ │   CONNECTED   │ ─────────────────▶ │ CLOSED │
+   │  UDP :9002  │  (≤ 5 s, không    │  TCP :9000   │   gửi PING đầu         │ UDP, Web UI   │    gửi CLOSE       └────────┘
+   └─────────────┘   thấy → thoát)   └──────────────┘                        └───────────────┘
+                                        ▲      │ AUTH_FAIL / lỗi mạng               │ Done(): nhận CLOSE hoặc
+                                        │      ▼                                    │ không nghe gì 10 s
+                                     ┌──────────────────────────────┐               │
+                                     │ RECONNECTING                 │ ◀─────────────┘
+                                     │ chờ 1, 2, 4 … tối đa 30 s    │
+                                     └──────────────────────────────┘
+```
+
+Lần đăng nhập đầu thất bại thì client thoát với thông báo lỗi; chỉ khi đã từng `CONNECTED` mới vào `RECONNECTING`.
+
+**Session phía server:**
+
+```
+  AUTH_OK                    nhận gói UDP đầu tiên              Done(): CLOSE, idle 10 s,
+ ─────────▶ PENDING ────────────────────────────────▶ ACTIVE ──────────────────────────────▶ REMOVED
+            (có trong Registry,                      (biết ip:port UDP,          hoặc hàng đợi gửi đầy
+             tên đã bị giữ)                           phát lại danh sách user)   (client quá chậm)
+               │                                                                    ▲
+               └──────────── không bao giờ gửi UDP: idle timeout 10 s ──────────────┘
+```
+
+**Kết nối transport** (`transport.Stats.State`): `waiting` (server chưa biết địa chỉ client) → `connected` → `closed`.
 
 
 ### 3.7 Tham số mặc định

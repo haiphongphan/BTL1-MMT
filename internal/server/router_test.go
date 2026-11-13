@@ -19,7 +19,7 @@ func newTestServer() *Server {
 // join giả lập 1 user đã qua handshake + gắn fake transport. Trả về đầu phía client.
 func join(t *testing.T, s *Server, name string, connID uint32) transport.Endpoint {
 	t.Helper()
-	if _, err := s.reg.AddPending(name, connID, [32]byte{}); err != nil {
+	if _, err := s.reg.AddPending(name, connID, "127.0.0.1:5000"); err != nil {
 		t.Fatal(err)
 	}
 	cli, srv := transport.FakePair()
@@ -179,10 +179,10 @@ func TestDisconnectBroadcastsUsers(t *testing.T) {
 
 func TestDuplicateLoginRejected(t *testing.T) {
 	r := NewRegistry()
-	if _, err := r.AddPending("alice", 1, [32]byte{}); err != nil {
+	if _, err := r.AddPending("alice", 1, "127.0.0.1:5000"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.AddPending("alice", 2, [32]byte{}); err != ErrAlreadyOnline {
+	if _, err := r.AddPending("alice", 2, "127.0.0.1:5000"); err != ErrAlreadyOnline {
 		t.Fatalf("err = %v, want ErrAlreadyOnline", err)
 	}
 }
@@ -211,5 +211,46 @@ func TestSeqReorderedAndRenumbered(t *testing.T) {
 		if seqs[i] != seqs[i-1]+1 || seqs[0] == 0 {
 			t.Fatalf("Seq server đánh cho bob không liên tiếp: %v", seqs)
 		}
+	}
+}
+
+// Người nhận không đọc (hàng đợi gửi đầy) → server ngắt riêng người đó, không bỏ tin lặng lẽ, và người gửi
+// không bị chặn.
+func TestSlowReceiverIsDisconnected(t *testing.T) {
+	s := newTestServer()
+	alice := join(t, s, "alice", 1)
+	join(t, s, "bob", 2) // bob không bao giờ đọc Recv()
+
+	done := make(chan struct{})
+	go func() {
+		for i := 0; i < sendQueueSize+500; i++ {
+			send(alice, protocol.AppMsg{Type: "chat", Text: strconv.Itoa(i)})
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("người gửi bị chặn vì người nhận chậm")
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for s.reg.GetByName("bob") != nil {
+		if time.Now().After(deadline) {
+			t.Fatal("bob không đọc mà vẫn không bị ngắt")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if s.reg.GetByName("alice") == nil {
+		t.Fatal("alice bị ngắt nhầm")
+	}
+}
+
+// Danh sách user gửi kèm địa chỉ của từng người.
+func TestUserListHasAddrs(t *testing.T) {
+	s := newTestServer()
+	alice := join(t, s, "alice", 1)
+	m := next(t, alice, "users")
+	if m.Addrs["alice"] != "127.0.0.1" { // FakeEndpoint không có địa chỉ UDP → dùng IP lúc handshake TCP
+		t.Fatalf("addrs = %v", m.Addrs)
 	}
 }

@@ -1,3 +1,5 @@
+// Package client là phía ứng dụng của người dùng: đăng nhập, giữ kết nối transport, tự kết nối lại,
+// gửi/nhận chat, DM, file và ghi mọi sự kiện vào EventLog để CLI và Web UI hiển thị.
 package client
 
 import (
@@ -14,14 +16,17 @@ import (
 	"github.com/phongphanhai06/go-collab/internal/transport"
 )
 
+// Client là một người dùng đã (hoặc đang) đăng nhập. An toàn cho nhiều goroutine: CLI, Web UI và
+// listenLoop cùng dùng một Client.
 type Client struct {
 	User        string
-	Events      *EventLog
-	DownloadDir string
-	Jitter      time.Duration
+	Events      *EventLog     // mọi sự kiện cho UI, có số thứ tự tăng dần
+	DownloadDir string        // thư mục lưu file nhận được
+	Jitter      time.Duration // giả lập trễ ngẫu nhiên chiều gửi (test)
 
 	mu      sync.Mutex // bảo vệ mọi field bên dưới
 	online  []string
+	addrs   map[string]string // user → "ip:port" do server báo kèm tin "users"
 	ep      transport.Endpoint
 	closing bool
 	state   string
@@ -31,18 +36,22 @@ type Client struct {
 	seq     uint64 // Seq của tin gửi đi trên kết nối hiện tại (1, 2, 3...); về 0 khi có kết nối mới
 }
 
+// Status là ảnh chụp trạng thái cho thanh trạng thái của Web UI (/api/status).
 type Status struct {
-	User     string   `json:"user"`
-	State    string   `json:"state"`
-	Online   []string `json:"online"`
-	RTTms    float64  `json:"rtt_ms"`
-	Cwnd     int      `json:"cwnd"`
-	InFlight int      `json:"in_flight"`
-	SentPkts uint64   `json:"sent_pkts"`
-	LostPkts uint64   `json:"lost_pkts"`
-	LossPct  float64  `json:"loss_pct"`
+	User     string            `json:"user"`
+	State    string            `json:"state"`  // connected | reconnecting | disconnected
+	Server   string            `json:"server"` // địa chỉ TCP của server
+	Online   []string          `json:"online"`
+	Addrs    map[string]string `json:"addrs"`
+	RTTms    float64           `json:"rtt_ms"`
+	Cwnd     int               `json:"cwnd"`
+	InFlight int               `json:"in_flight"`
+	SentPkts uint64            `json:"sent_pkts"`
+	LostPkts uint64            `json:"lost_pkts"`
+	LossPct  float64           `json:"loss_pct"`
 }
 
+// NewClient tạo client chưa kết nối; gọi Connect để đăng nhập.
 func NewClient(username string) *Client {
 	return &Client{
 		User:        username,
@@ -51,15 +60,19 @@ func NewClient(username string) *Client {
 	}
 }
 
+// OnlineUsers trả về bản sao danh sách user đang online.
 func (c *Client) OnlineUsers() []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return append([]string(nil), c.online...)
 }
 
-func (c *Client) setOnline(users []string) {
+func (c *Client) setOnline(users []string, addrs map[string]string) {
 	c.mu.Lock()
 	c.online = users
+	if addrs != nil {
+		c.addrs = addrs
+	}
 	c.mu.Unlock()
 }
 
@@ -76,9 +89,14 @@ func (c *Client) setState(st string) {
 	c.Events.Add("status", st)
 }
 
+// Status gom trạng thái kết nối và số liệu của transport (RTT, cwnd, in-flight, tỉ lệ mất gói).
 func (c *Client) Status() Status {
 	c.mu.Lock()
-	st := Status{User: c.User, State: c.state, Online: append([]string(nil), c.online...)}
+	st := Status{User: c.User, State: c.state, Server: c.addr, Online: append([]string(nil), c.online...),
+		Addrs: make(map[string]string, len(c.addrs))}
+	for k, v := range c.addrs {
+		st.Addrs[k] = v
+	}
 	ep := c.ep
 	c.mu.Unlock()
 	if st.State == "" {
@@ -101,6 +119,8 @@ func (c *Client) isClosing() bool {
 	return c.closing
 }
 
+// Connect đăng nhập lần đầu (TCP handshake rồi mở kênh UDP). Địa chỉ và mật khẩu được giữ lại để tự
+// kết nối lại khi mất mạng. loss > 0 thì giả lập mất gói chiều gửi.
 func (c *Client) Connect(serverTCPAddr, password string, loss float64) error {
 	c.mu.Lock()
 	c.addr, c.pass, c.loss = serverTCPAddr, password, loss
@@ -108,6 +128,7 @@ func (c *Client) Connect(serverTCPAddr, password string, loss float64) error {
 	return c.dial()
 }
 
+// dial: handshake TCP lấy conn_id và k_udp, rồi Dial transport tới cổng UDP server báo trong KEYX.
 func (c *Client) dial() error {
 	c.mu.Lock()
 	addr, pass, loss := c.addr, c.pass, c.loss
@@ -133,7 +154,7 @@ func (c *Client) dial() error {
 	}
 	var pc transport.PacketConn = sock
 	if loss > 0 || c.Jitter > 0 {
-		pc = &transport.LossyConn{UDPConn: sock, Loss: loss}
+		pc = &transport.LossyConn{UDPConn: sock, Loss: loss, Jitter: c.Jitter}
 	}
 	conn, err := transport.Dial(pc, srvUDP, keyx.ConnID, kUDP) // Dial tự gửi PING đầu tiên
 	if err != nil {
@@ -145,6 +166,7 @@ func (c *Client) dial() error {
 	return nil
 }
 
+// Close thoát hẳn: gửi CLOSE cho server (server báo mọi người ngay) và không kết nối lại nữa.
 func (c *Client) Close() {
 	c.mu.Lock()
 	c.closing = true
@@ -155,6 +177,8 @@ func (c *Client) Close() {
 	}
 }
 
+// ConnectTCPAndAuth chạy phía client của handshake: HELLO → KEYX → AUTH (mật khẩu mã hóa bằng k_tcp)
+// → AUTH_OK/AUTH_FAIL. Trả về KEYX (conn_id, cổng UDP) và k_udp để mở kênh UDP.
 func (c *Client) ConnectTCPAndAuth(serverTCPAddr, password string) (*protocol.KeyX, [32]byte, error) {
 	conn, err := net.DialTimeout("tcp", serverTCPAddr, 5*time.Second)
 	if err != nil {
@@ -196,11 +220,12 @@ func (c *Client) ConnectTCPAndAuth(serverTCPAddr, password string) (*protocol.Ke
 		return nil, [32]byte{}, fmt.Errorf("auth failed: %s", res.Reason)
 	}
 
-	c.setOnline(res.Users)
+	c.setOnline(res.Users, nil)
 	c.Events.Add("users", res.Users)
 	return &keyx, kUDP, nil
 }
 
+// AttachEndpoint dùng kết nối transport mới và khởi động vòng nhận của nó.
 func (c *Client) AttachEndpoint(ep transport.Endpoint) {
 	c.mu.Lock()
 	c.ep = ep
@@ -209,12 +234,15 @@ func (c *Client) AttachEndpoint(ep transport.Endpoint) {
 	go c.listenLoop(ep)
 }
 
+// inStream là trạng thái một stream đang nhận từ server.
 type inStream struct {
 	kind byte
 	buf  []byte    // message: gom tới FIN
 	file *fileRecv // file: ghi thẳng xuống đĩa
 }
 
+// listenLoop là goroutine nhận của một kết nối: ghép các đoạn theo stream, phân loại theo byte đầu
+// (message hay file). Khi kết nối đóng mà người dùng không chủ động thoát thì chuyển sang kết nối lại.
 func (c *Client) listenLoop(ep transport.Endpoint) {
 	streams := make(map[uint32]*inStream)
 	var inSeq protocol.SeqBuffer // sắp lại tin server gửi theo Seq; mỗi kết nối một bộ đệm mới
@@ -278,12 +306,14 @@ func (c *Client) handleMessage(inSeq *protocol.SeqBuffer, data []byte) {
 	}
 	for _, m := range inSeq.Push(msg) {
 		if m.Type == "users" {
-			c.setOnline(m.Users)
+			c.setOnline(m.Users, m.Addrs)
 		}
 		c.Events.Add(m.Type, m)
 	}
 }
 
+// reconnectLoop thử handshake lại với backoff 1, 2, 4... tối đa 30 s. Trong ~10 s đầu server có thể còn giữ
+// session cũ (chưa hết idle timeout) và trả AUTH_FAIL "đang online": cứ thử tiếp là vào được.
 func (c *Client) reconnectLoop() {
 	delay := time.Second
 	for !c.isClosing() {
@@ -297,7 +327,10 @@ func (c *Client) reconnectLoop() {
 	}
 }
 
+// ErrNotConnected: đang mất kết nối (đang kết nối lại), chưa gửi được.
 var ErrNotConnected = errors.New("client: chưa có kết nối UDP")
+
+// send gửi một AppMsg thành một stream ưu tiên cao (không bị file chặn), kèm Seq để bên nhận sắp đúng thứ tự.
 
 func (c *Client) send(m protocol.AppMsg) error {
 	// Lấy endpoint và cấp Seq trong cùng một lần giữ khóa, để Seq luôn thuộc đúng kết nối đang dùng.
@@ -318,10 +351,12 @@ func (c *Client) send(m protocol.AppMsg) error {
 	return ep.SendMessage(append([]byte{protocol.KindMessage}, b...))
 }
 
+// SendChat gửi tin cho mọi người đang online.
 func (c *Client) SendChat(text string) error {
 	return c.send(protocol.AppMsg{Type: "chat", Text: text})
 }
 
+// SendDM gửi tin riêng cho một người.
 func (c *Client) SendDM(to, text string) error {
 	return c.send(protocol.AppMsg{Type: "dm", To: to, Text: text})
 }

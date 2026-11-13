@@ -10,7 +10,7 @@ Tài liệu: [`docs/protocol.md`](docs/protocol.md) (đặc tả giao thức), [
 ## 1. Yêu cầu
 
 - Go ≥ 1.22 ([go.dev/dl](https://go.dev/dl/)). Đã kiểm tra build trên macOS, Linux, Windows.
-- Chạy nhiều máy trong LAN: mở firewall `9000/TCP`, `9001/UDP` trên máy server.
+- Chạy nhiều máy trong LAN: mở firewall `9000/TCP`, `9001/UDP` trên máy server (và `9002/UDP` trên máy client nếu dùng `-server auto`).
 
 ## 2. Build
 
@@ -33,20 +33,27 @@ go build -o bin/client ./cmd/client
 
 Mở http://127.0.0.1:8081 và http://127.0.0.1:8082:
 
-- Cột trái: danh sách người đang online; **bấm tên** để mở tab chat riêng.
+- Cột trái: danh sách người đang online kèm **IP:port** mà server đang dùng để nói chuyện với họ; **bấm tên** để mở tab chat riêng.
 - Khung giữa: tab **Chung** và các tab DM; nhập tin rồi Enter.
 - Nút **📎**: gửi file cho người trong tab đang mở (tab Chung = gửi cho mọi người). Thanh tiến trình hiện ở cả bên gửi và bên nhận; file nhận nằm trong `downloads/` của thư mục chạy client, được kiểm tra SHA-256 trước khi báo xong.
-- Thanh trên cùng: 🟢 connected / 🟡 reconnecting / 🔴 disconnected, RTT, cwnd, in-flight, % gói mất.
+- Thanh trên cùng: 🟢 connected / 🟡 reconnecting / 🔴 disconnected, địa chỉ server, RTT, cwnd, in-flight, % gói mất.
 
 CLI trong terminal của client: `/msg <text>`, `/dm <user> <text>`, `/file <đường-dẫn> [user]`, `/users`, `/quit`. Gõ thẳng một dòng = `/msg`. Ctrl+C thoát và báo server ngay.
 
 ## 4. Chạy nhiều máy trong LAN
 
-Trên máy server: `./bin/server`. Trên máy khác: `./bin/client -server <IP-server>:9000 -user alice -pass 123456`. Web UI luôn chỉ lắng nghe trên `127.0.0.1` của máy chạy client.
+Trên máy server: `./bin/server` (log in ra IP:port của từng client khi họ kết nối). Trên máy khác, chọn một trong hai:
+
+```bash
+./bin/client -server auto -user alice -pass 123456            # tự tìm server qua broadcast UDP :9002 (tối đa 5 s)
+./bin/client -server 192.168.1.10:9000 -user alice -pass 123456  # chỉ định địa chỉ, khi mạng chặn broadcast
+```
+
+Mạng có firewall thì mở thêm `9002/UDP` chiều vào trên máy client để dùng `-server auto`. Web UI luôn chỉ lắng nghe trên `127.0.0.1` của máy chạy client.
 
 ## 5. Tài khoản
 
-`users.json` lưu `sha256(salt ‖ password)` với salt ngẫu nhiên cho từng user. Tài khoản demo có sẵn, mật khẩu đều là `123456`: `alice`, `bob`, `carol`, `phong`, `hai`, và `user1` … `user20` (dùng cho test tải).
+`users.json` lưu `sha256(salt ‖ password)` với salt ngẫu nhiên cho từng user. Tài khoản demo có sẵn, mật khẩu đều là `123456`: `alice`, `bob`, `carol`, `phong`, `hai`, và `user1` … `user20` (dùng cho test tải). Riêng `phan` có mật khẩu `654321`.
 
 Thêm hoặc đặt lại mật khẩu:
 
@@ -73,13 +80,13 @@ go run ./cmd/mkusers -n 30                      # tạo user1..user30, mật kh�
 
 | Cờ | Mặc định | Ý nghĩa |
 |---|---|---|
-| `-server` | `127.0.0.1:9000` | Địa chỉ TCP của server |
+| `-server` | `127.0.0.1:9000` | Địa chỉ TCP của server, hoặc `auto` để tự tìm server trong LAN |
 | `-user`, `-pass` | | Tài khoản |
 | `-web` | `127.0.0.1:8081` | Địa chỉ Web UI (`""` để tắt) |
 | `-cc`, `-cclog`, `-loss`, `-jitter` | | Như server |
 | `-bot` | `false` | Tự gửi chat mỗi 1–3 s (test tải) |
 
-Server còn phát broadcast `COLLAB_SERVER <ip> 9000 9001` lên `9002/UDP` mỗi 2 s để công cụ ngoài có thể phát hiện; client hiện dùng cờ `-server`.
+Server phát broadcast `COLLAB_SERVER <ip> <tcp_port> <udp_port>` lên `9002/UDP` mỗi 2 s; client `-server auto` nghe cổng này, lấy IP từ địa chỉ nguồn của gói. Nhiều client trên cùng một máy dò cùng lúc được.
 
 ## 7. Test
 
@@ -118,7 +125,7 @@ Dữ liệu (chat, DM, file) đi qua **một giao thức tin cậy tự viết t
 - Congestion control: **CUBIC** (RFC 9438) mặc định, hoặc cửa sổ cố định 64 KB. Mất gói ngẫu nhiên nặng (`-loss 0.1`) làm CUBIC giảm tốc mạnh; dùng `-cc fixed` khi muốn demo độ tin cậy ở tốc độ cao.
 - Tầng ứng dụng: stream bắt đầu bằng `0x01` là message JSON, `0x02` là file (`[len][FileMeta JSON][dữ liệu]`); server chuyển tiếp file theo kiểu pipeline, không giữ cả file trong RAM; người nhận ghi đĩa và băm SHA-256 cùng lúc.
 - Thứ tự tin nhắn: vì mỗi tin là một stream riêng (không HoL), khi mất gói tin sau có thể tới trước tin trước. Người gửi đánh `seq` tăng dần theo kết nối, người nhận sắp lại bằng `protocol.SeqBuffer`; server đánh lại `seq` theo dãy riêng của từng người nhận trong `writeLoop` của session đó.
-- Server: mỗi session có hàng đợi gửi riêng (64 tin) và đúng một goroutine ghi, nên một client chậm không chặn người khác; server ghi đè `from` của mọi tin bằng username đã xác thực (chống giả danh).
+- Server: mỗi session có hàng đợi gửi riêng (4096 tin) và đúng một goroutine ghi, nên một client chậm không chặn người khác. Server **không bỏ tin**: hàng đợi đầy thì ngắt riêng client quá chậm đó, client tự kết nối lại. Server ghi đè `from` của mọi tin bằng username đã xác thực (chống giả danh) và theo dõi IP:port của từng user.
 
 ## 9. Cấu trúc thư mục
 
@@ -127,7 +134,7 @@ cmd/server, cmd/client, cmd/mkusers   # main: chỉ đọc cờ và lắp ráp
 internal/protocol   # header 12 byte, frame, length-prefixed JSON, header file, SeqBuffer
 internal/transport  # UDP tin cậy: conn, stream, ack, rtt, cubic, crypto, mux, lossy (giả lập mạng)
 internal/server     # handshake/auth, registry, router (chat/DM/relay file), discovery
-internal/client     # core (connect/reconnect), gửi/nhận file, event log, test hệ thống
+internal/client     # core (connect/reconnect), discovery, gửi/nhận file, event log, test hệ thống
 internal/webui      # HTTP server tự viết + static/ (HTML/JS/CSS thuần, nhúng bằng embed)
 docs/               # protocol.md, reliability.md, code-walkthrough.md, img/
 report/             # báo cáo LaTeX (pdflatex -shell-escape, hoặc Overleaf)

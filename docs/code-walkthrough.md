@@ -92,7 +92,7 @@ Tầng app **chỉ biết interface này**, không biết gì về gói, ACK hay
 |---|---|---|
 | 9000 | TCP | Handshake: trao khóa + đăng nhập, xong thì đóng |
 | 9001 | UDP | **Mọi dữ liệu**: chat, file, ACK, PING |
-| 9002 | UDP broadcast | Server quảng bá `COLLAB_SERVER <ip> 9000 9001` mỗi 2 s |
+| 9002 | UDP broadcast | Server quảng bá `COLLAB_SERVER <ip> <tcp_port> <udp_port>` mỗi 2 s; client `-server auto` nghe để tự tìm server |
 | 8081 | TCP (HTTP) | Web UI của client, chỉ nghe `127.0.0.1` |
 
 **Vì sao handshake dùng TCP?** Đăng nhập cần trao đổi theo thứ tự, tin cậy, chỉ vài message. Dùng TCP cho
@@ -258,7 +258,7 @@ Server **không lưu file xuống đĩa**: nó chuyển tiếp từng mẩu ngay
 
 ### Bước 5. Ngắt kết nối
 
-- **Client thoát đàng hoàng** (`/quit`): `Conn.Close()` gửi 1 gói `CLOSE "bye"` → server `handlePacket` thấy
+- **Client thoát đàng hoàng** (`/quit`, Ctrl+C): `Conn.Close()` gửi 3 gói `CLOSE "bye"` (mỗi gói một packet_num, để mất gói ngẫu nhiên khó làm mất hết) → server `handlePacket` thấy
   CLOSE → `shutdown()` → `Done()` đóng → `serveSession` thoát → `dropSession` → xóa khỏi Registry →
   broadcast danh sách user mới.
 - **Client chết đột ngột** (kill -9, rút mạng): không có CLOSE. Server không nghe gì trong **10 s** →
@@ -736,10 +736,19 @@ type Server struct {
 type Session struct {        // 1 user đang online
     Username string
     ConnID   uint32
-    KUDP     [32]byte
-    EP       transport.Endpoint   // nil khi mới AddPending, gán ở Attach
-    sendCh   chan []byte          // hàng đợi tin gửi tới user này (64)
+    TCPAddr  string                    // ip:port lúc handshake TCP
+    EP       transport.Endpoint        // nil khi mới AddPending, gán ở Attach
+    sendCh   chan protocol.AppMsg      // hàng đợi tin gửi tới user này (4096)
+    inSeq    protocol.SeqBuffer        // sắp lại tin user này gửi lên theo Seq
+    kicked   atomic.Bool               // đã bị ngắt vì hàng đợi đầy
 }
+```
+
+`Session.Addr()`: địa chỉ UDP thật (`EP.Stats().Peer`) nếu transport đã nhận gói đầu tiên, không thì IP lúc handshake.
+Server **theo dõi IP và cổng của từng user**: log `User 'alice' active: TCP 1.2.3.4:51000, UDP 1.2.3.4:62000` khi
+nhận gói UDP đầu tiên (goroutine `watchPeer`), và gửi kèm `addrs` trong tin `users` để Web UI hiện cạnh tên.
+
+```
 ```
 
 **Registry** ([registry.go](../internal/server/registry.go)): 2 map `byName`, `byConnID` + `RWMutex`.
@@ -748,14 +757,16 @@ type Session struct {        // 1 user đang online
 - `Attach`: gán `EP` cho session.
 - `Remove(sess)`: chỉ xóa nếu `byName[name] == sess` — **so con trỏ**, để session cũ đã bị thay không xóa nhầm session mới.
 - `Snapshot`: chép danh sách session đã có EP → gửi tin **không giữ lock**.
+- `Names`, `Addrs`: danh sách tên (đã sắp xếp) và địa chỉ, dùng cho tin `users`.
 
 ### 7.2 Mỗi session có 2 goroutine — [router.go](../internal/server/router.go)
 
 ```
 AttachEndpoint(connID, ep):
     sess = reg.Attach(...)
-    go sess.writeLoop()      // GỬI: sendCh → EP.SendMessage
-    go s.serveSession(sess)  // NHẬN: EP.Recv() → phân loại stream → định tuyến
+    go sess.writeLoop()      // GỬI: sendCh → đánh Seq của người nhận → EP.SendMessage
+    go s.serveSession(sess)  // NHẬN: EP.Recv() → phân loại stream → SeqBuffer → định tuyến
+    go s.watchPeer(sess)     // chờ gói UDP đầu tiên → log IP:port, phát lại danh sách user
     broadcastUserList()
 ```
 
@@ -763,14 +774,17 @@ AttachEndpoint(connID, ep):
 (non-blocking). Việc gọi `B.EP.SendMessage` (có thể bị chặn) nằm trong goroutine của B. Nhờ vậy **1 người nhận chậm
 không làm chậm người gửi hay người nhận khác**. `writeLoop` cũng là goroutine duy nhất gửi tới B, nên thứ tự các tin tới B được giữ ở phía gửi.
 
-`Session.Send` ([router.go:20](../internal/server/router.go#L20)): `sendCh` đầy → **bỏ tin**, log.
+`Session.Send` ([router.go](../internal/server/router.go)): không chặn. `sendCh` (4096 tin) đầy nghĩa là client không
+đọc trong thời gian dài → server **ngắt kết nối của riêng client đó** (`go EP.Close()`, chỉ một lần nhờ `kicked`) thay
+vì lặng lẽ bỏ tin; client tự kết nối lại. Test: `TestSlowReceiverIsDisconnected`.
 
 **`serveSession`** ([router.go:56](../internal/server/router.go#L56)) — vòng lặp nhận:
 
 ```
 streams := map[stream_id]*inStream
 Delivery đầu tiên của stream → kind = byte đầu (0x01 / 0x02)
-  0x01 → onMessageData: gom buf tới FIN (tối đa 64 KB), parse JSON, From = sess.Username, routeMessage
+  0x01 → onMessageData: gom buf tới FIN (tối đa 64 KB), parse JSON, inSeq.Push (sắp theo Seq),
+         From = sess.Username, routeMessage
   0x02 → onFileData
 Fin → xóa stream khỏi map
 Done() → return → defer: đóng mọi relay đang mở, recover panic, dropSession
@@ -799,7 +813,10 @@ Người nhận nào lỗi thì `outs[i] = nil` và bỏ qua từ đó. `defer` 
 
 ### 7.4 Discovery — [discovery.go](../internal/server/discovery.go)
 
-Broadcast `COLLAB_SERVER <lanIP> 9000 9001` tới `255.255.255.255:9002` mỗi 2 s. `localIP()` trong `main.go` lấy IP LAN
+Broadcast `COLLAB_SERVER <lanIP> <tcp_port> <udp_port>` tới `255.255.255.255:9002` mỗi 2 s (cổng TCP lấy từ cờ `-tcp`).
+Phía client: [client/discovery.go](../internal/client/discovery.go) `Discover(5s)` nghe cổng 9002 với
+`SO_REUSEADDR`/`SO_REUSEPORT` (nhiều client cùng máy dò cùng lúc được), lấy IP từ **địa chỉ nguồn** của gói và cổng TCP
+từ nội dung; bật bằng `-server auto`. `localIP()` trong `main.go` lấy IP LAN
 bằng mẹo `net.Dial("udp4", "8.8.8.8:80")` (UDP "dial" không gửi gói nào, chỉ để OS chọn interface ra ngoài).
 
 ---
@@ -813,7 +830,7 @@ type Client struct {
     User        string
     Events      *EventLog     // hàng sự kiện cho UI
     DownloadDir string        // "downloads"
-    mu sync.Mutex             // bảo vệ: online, ep, closing, state, addr, pass, loss
+    mu sync.Mutex             // bảo vệ: online, addrs, ep, closing, state, addr, pass, loss, seq
     ...
 }
 ```
@@ -827,17 +844,19 @@ Lưu `addr, pass, loss` để **reconnect tự động** không cần hỏi lạ
   byte đầu quyết định loại. Message gom tới FIN rồi `handleMessage`; file thì `onFileData` ghi thẳng xuống đĩa.
   - `defer`: file nào đang nhận dở thì `abort()` (xóa file chưa hoàn chỉnh).
   - `Done()`: nếu user chủ động đóng → `disconnected`; nếu không → `reconnecting` + `go reconnectLoop()`.
-- **`handleMessage`**: `users` → cập nhật danh sách online; mọi loại → `Events.Add(type, msg)`.
+- **`handleMessage`**: qua `SeqBuffer` của kết nối (sắp theo `Seq` server đánh); `users` → cập nhật danh sách
+  online + địa chỉ; mọi loại → `Events.Add(type, msg)`.
+- **`send`**: lấy `ep` và cấp `Seq` (đếm theo kết nối, về 0 khi kết nối lại) trong cùng một lần khóa.
 - **`reconnectLoop`**: chờ 1 s, thử `dial()`, thất bại thì nhân đôi (tối đa 30 s). Mỗi lần là handshake mới hoàn toàn.
 
 ### 8.3 Gửi file 2 lượt — [client/files.go:32](../internal/client/files.go#L32)
 
 1. Lượt 1: `io.Copy(sha256, file)` → hash + size. Từ chối file > 4 GB (offset stream là `uint32`).
 2. `Seek(0)`, tạo `FileMeta` (ID ngẫu nhiên 8 byte hex), `EncodeFileHeader`.
-3. `OpenStream(false)` (bulk), `Write(hdr)`, `io.Copy(stream, file)`, `Close()`.
+3. `OpenStream(false)` (bulk), `Write(hdr)`, `io.Copy(stream, progressReader(file))`, `Close()`.
 
-Event `file_start` / `file_done` cho Web UI. (`progressReader` có sẵn để báo tiến độ phía gửi nhưng `io.Copy` hiện
-đọc thẳng từ `f`, nên phía gửi chỉ có start/done.)
+Event `file_start` / `file_progress` (≤ 5 lần/s, chiều `out`) / `file_done` cho Web UI. `Write` của stream bulk bị chặn
+khi hàng đợi transport đầy, nên tốc độ đọc file = tốc độ mạng và thanh tiến trình bên gửi phản ánh đúng.
 
 ### 8.4 Nhận file — [client/files.go:121](../internal/client/files.go#L121)
 
@@ -874,7 +893,7 @@ in event ra console mỗi 200 ms.
 | Endpoint | Làm gì |
 |---|---|
 | `GET /api/events?since=N` | `Events.Since(N)` |
-| `GET /api/status` | user, state, online, RTT, cwnd, in-flight, sent/lost, loss% |
+| `GET /api/status` | user, state, server, online + addrs, RTT, cwnd, in-flight, sent/lost, loss% |
 | `POST /api/send {to,text}` | `to` rỗng → chat, có → DM |
 | `POST /api/upload?name=&to=` | body là file thô → lưu file tạm → `go SendFile` → xóa thư mục tạm |
 
@@ -898,6 +917,8 @@ in event ra console mỗi 200 ms.
 | `writeLoop` | N | gửi tin tới từng user |
 | `serveSession` | N | nhận + định tuyến từ từng user |
 | `relayFile` | 1 / file đang chuyển | chuyển tiếp file |
+| `watchPeer` | tạm, ≤ 10 s / session mới | chờ gói UDP đầu, log IP:port |
+| `logRunTime`, signal | 2 | log goroutine/heap/online mỗi 10 s; Ctrl+C → gửi CLOSE cho mọi client |
 
 **Client:**
 
@@ -947,23 +968,15 @@ in event ra console mỗi 200 ms.
 
 ## 12. Chỗ code hiện tại lệch với tài liệu / hạn chế
 
-Đọc kỹ phần này trước khi demo/vấn đáp, vì `protocol.md` mô tả vài thứ **không còn trong code** (sau commit
-`e0f3dda` revert phần của B):
+Các điểm lệch trước đây (SeqBuffer chưa dùng, server bỏ tin khi hàng đợi đầy, code chết trong `auth.go`/`registry.go`,
+client chưa nghe discovery, thanh tiến trình bên gửi không chạy, cờ `-jitter` không có tác dụng) **đã được sửa**
+(13/11/2026). Còn lại là các hạn chế thiết kế đã biết:
 
-1. **`SeqBuffer` chưa được dùng.** `protocol.md` mục 3.5 nói client/server đánh `AppMsg.Seq` và bên nhận dùng
-   `SeqBuffer`. Hiện tại `client.send` và `routeMessage` **không gán Seq**, `listenLoop`/`serveSession` **không qua SeqBuffer**.
-   ⇒ Khi mất gói, 2 tin chat liên tiếp **có thể hiện sai thứ tự**. (`SeqBuffer` có code + test đầy đủ trong `protocol/seq.go`.)
-2. **Server có bỏ tin.** `protocol.md` nói hàng đợi 4096 tin và "không bỏ tin, đầy thì ngắt client". Code hiện tại:
-   `sendCh` buffer **64**, đầy thì `Session.Send` **bỏ tin** và chỉ log.
-3. `pendingTimeout` (15 s) trong `auth.go` khai báo nhưng chưa dùng; `RemoveIfPending`, `GetByConnID` cũng chưa có ai gọi.
-4. Discovery: server phát, nhưng client **chưa có code nghe** cổng 9002 (vẫn phải truyền `-server`). Chuỗi broadcast
-   ghi cứng cổng TCP `9000` dù `-tcp` đổi được.
-5. `relayFile` ghi tuần tự cho từng người nhận: 1 người nhận chậm làm chậm tất cả người nhận cùng file. Và trong
+1. `relayFile` ghi tuần tự cho từng người nhận: 1 người nhận chậm làm chậm tất cả người nhận cùng file. Và trong
    lúc `serveSession` của A bị chặn ở `relay <-`, **chat của A cũng phải chờ** (chỉ ảnh hưởng chính người gửi file).
-6. `packet_num` là `uint32`, không xử lý tràn số (≈4,3 tỉ gói/kết nối, ~5 TB dữ liệu) — tràn sẽ trùng nonce. Thực tế không chạm tới.
-7. Không xác thực server (không chứng chỉ) → có thể bị MITM khi trao khóa; KDF dùng SHA256 thay vì HKDF; hash mật khẩu 1 vòng.
-8. `bytesInFlight` tính byte **cả gói** (có header, tag) còn `peerWindow` là byte **data** → flow control xấp xỉ, hơi bảo thủ.
-9. `progressReader` khai báo trong `SendFile` nhưng chưa được nối vào `io.Copy` → phía gửi không có `file_progress`.
+2. `packet_num` là `uint32`, không xử lý tràn số (≈4,3 tỉ gói/kết nối, ~5 TB dữ liệu) — tràn sẽ trùng nonce. Thực tế không chạm tới.
+3. Không xác thực server (không chứng chỉ) → có thể bị MITM khi trao khóa; KDF dùng SHA256 thay vì HKDF; hash mật khẩu 1 vòng.
+4. `bytesInFlight` tính byte **cả gói** (có header, tag) còn `peerWindow` là byte **data** → flow control xấp xỉ, hơi bảo thủ.
 
 ---
 

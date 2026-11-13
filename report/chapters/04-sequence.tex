@@ -28,7 +28,7 @@ hiểu là đã được tầng transport mã hóa, ACK và gửi lại nếu c�
     \node[note, fill=gray!12] at (4.5,-12) {đóng TCP; session phía server ở trạng thái pending, chờ địa chỉ UDP};
     \node[note, fill=gray!12] at (4.5,-13.1) {UDP :9001, header 12 byte rõ + phần còn lại mã hóa bằng $k_\text{udp}$};
     \draw[msg] (0,-13.9) -- (9,-14.9) node[lab] {\#0 PING (gửi lại sau 200, 400, 800 ms nếu chưa nghe server)};
-    \node[note, right] at (9.15,-15.4) {học IP:port thật của client;\\\fname{AttachEndpoint}: session active};
+    \node[note, right] at (9.15,-15.4) {học IP:port thật của client, ghi log;\\session active};
     \draw[ack] (9,-16.1) -- (0,-17.1) node[lab] {ACK};
     \draw[msg] (9,-17) -- (0,-18) node[lab, below] {STREAM \{users: [\dots]\} tới mọi client đang online};
   \end{tikzpicture}

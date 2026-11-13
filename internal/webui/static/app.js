@@ -6,6 +6,7 @@ const $ = (id) => document.getElementById(id);
 let me = '';          // username của mình (lấy từ /api/status)
 let since = 0;        // seq của event cuối đã thấy
 let currentTab = '';  // '' = chat chung, ngược lại = tên người đang DM
+let addrs = {};       // user → "ip:port" server báo kèm danh sách user
 const history = { '': [] };   // tab → danh sách tin
 const unread = new Set();
 
@@ -28,7 +29,9 @@ function handle(ev) {
   switch (ev.type) {
     case 'chat':   addMsg('', ev.data); break;
     case 'dm':     addMsg(ev.data.from === me ? ev.data.to : ev.data.from, ev.data); break;
-    case 'users':  renderUsers(ev.data.users ?? ev.data); break; // AUTH_OK trả mảng, server trả AppMsg
+    case 'users':  // AUTH_OK trả mảng tên, server trả AppMsg {users, addrs}
+      if (ev.data.addrs) addrs = ev.data.addrs;
+      renderUsers(ev.data.users ?? ev.data); break;
     case 'error':  addSys(ev.data.text, 'err'); break;
     case 'status': addSys(`Trạng thái: ${ev.data}`); break;
     case 'file_start':
@@ -42,7 +45,8 @@ function handle(ev) {
 async function pollStatus() {
   try {
     const st = await (await fetch('/api/status')).json();
-    if (!me) { me = st.user; $('me').textContent = me; renderUsers(st.online); }
+    if (!me) { me = st.user; $('me').textContent = me; addrs = st.addrs || {}; renderUsers(st.online); }
+    $('server').textContent = `server ${st.server}`;
     const icon = { connected: '🟢', reconnecting: '🟡', disconnected: '🔴' }[st.state] ?? '⚪';
     setState(st.state, `${icon} ${st.state}`);
     $('net').textContent =
@@ -64,7 +68,7 @@ function renderUsers(users) {
   ul.innerHTML = '';
   for (const u of [...users].sort()) {
     const li = document.createElement('li');
-    li.innerHTML = `<span class="dot">●</span>${esc(u)}`;
+    li.innerHTML = `<span class="dot">●</span>${esc(u)}<span class="addr">${esc(addrs[u] ?? '')}</span>`;
     if (u === me) li.classList.add('me');
     else li.onclick = () => openTab(u);
     ul.appendChild(li);

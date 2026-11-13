@@ -11,8 +11,16 @@ import (
 	"strings"
 )
 
+// maxJSONBody: giới hạn thân request JSON (tin chat), file đi qua /api/upload riêng.
 const maxJSONBody = 64 << 10
 
+// route ánh xạ đường dẫn tới handler:
+//
+//	GET  /, /app.js, /style.css      file tĩnh
+//	GET  /api/events?since=N          các event có seq > N (trình duyệt poll mỗi 400 ms)
+//	GET  /api/status                  trạng thái kết nối, RTT, cwnd, mất gói, user online + địa chỉ
+//	POST /api/send   {to, text}       chat (to rỗng) hoặc DM
+//	POST /api/upload?to=&name=        thân là nội dung file thô (không multipart)
 func (s *Server) route(req *Request) Response {
 	switch {
 	case req.Path == "/" || req.Path == "/index.html":
@@ -34,6 +42,7 @@ func (s *Server) route(req *Request) Response {
 	return Response{404, "text/plain", []byte("not found")}
 }
 
+// static trả một file nhúng trong binary.
 func (s *Server) static(name, ctype string) Response {
 	b, err := static.ReadFile("static/" + name)
 	if err != nil {
@@ -42,6 +51,7 @@ func (s *Server) static(name, ctype string) Response {
 	return Response{200, ctype, b}
 }
 
+// jsonResp mã hóa v thành JSON.
 func jsonResp(status int, v any) Response {
 	b, err := json.Marshal(v)
 	if err != nil {
@@ -50,16 +60,19 @@ func jsonResp(status int, v any) Response {
 	return Response{status, "application/json", b}
 }
 
+// jsonErr trả {"error": msg}.
 func jsonErr(status int, msg string) Response {
 	return jsonResp(status, map[string]string{"error": msg})
 }
 
+// apiEvents: GET /api/events?since=N.
 func (s *Server) apiEvents(req *Request) Response {
 	q, _ := url.ParseQuery(req.RawQuery)
 	since, _ := strconv.ParseInt(q.Get("since"), 10, 64)
 	return jsonResp(200, s.c.Events.Since(since))
 }
 
+// apiSend: POST /api/send {to, text}; to rỗng = chat chung.
 func (s *Server) apiSend(req *Request) Response {
 	if req.Method != "POST" {
 		return jsonErr(405, "POST only")
@@ -87,6 +100,8 @@ func (s *Server) apiSend(req *Request) Response {
 	return jsonResp(200, map[string]bool{"ok": true})
 }
 
+// apiUpload: POST /api/upload?to=&name=. Thân được ghi thẳng ra file tạm (không đọc cả file vào RAM),
+// rồi SendFile chạy trong goroutine riêng; trình duyệt theo dõi tiến độ qua các event file_progress.
 func (s *Server) apiUpload(req *Request) Response {
 	if req.Method != "POST" {
 		return jsonErr(405, "POST only")

@@ -612,6 +612,9 @@ func (c *Conn) publishStats() {
 		State:    "connected",
 	}
 
+	if c.peer != nil {
+		st.Peer = c.peer.String()
+	}
 	if c.closed {
 		st.State = "closed"
 	} else if c.peer == nil {
@@ -718,18 +721,26 @@ func (c *Conn) sendPacket(frames []*protocol.StreamFrame, now time.Time) {
 	}
 }
 
-// sendClose gửi 1 gói chỉ chứa CLOSE. Không theo dõi, không gửi lại.
+// closeCopies: số bản CLOSE gửi liên tiếp khi đóng chủ động. Kết nối đóng ngay sau đó nên không thể chờ ACK
+// để gửi lại; gửi vài bản (mỗi bản một packet_num riêng, nonce không lặp) để mất gói ngẫu nhiên khó làm mất
+// hết: ở loss 10%, xác suất mất cả 3 bản là 0,1%. Bên nhận đóng ở bản đầu tiên, các bản sau bị bỏ lặng lẽ.
+const closeCopies = 3
+
+// sendClose gửi closeCopies gói chỉ chứa CLOSE. Không theo dõi, không chờ ACK; nếu mất hết thì bên kia vẫn tự
+// đóng sau idle timeout.
 func (c *Conn) sendClose(reason string) {
 	if c.peer == nil {
 		return
 	}
 
-	pn := c.nextPN
-	c.nextPN++
 	payload := protocol.AppendClose(nil, &protocol.CloseFrame{
 		Reason: reason,
 	})
-	c.sock.WriteToUDP(c.seal(pn, payload), c.peer) // cố gắng 1 lần; nếu mất thì bên kia tự đóng sau idle timeout
+	for i := 0; i < closeCopies; i++ {
+		pn := c.nextPN
+		c.nextPN++
+		c.sock.WriteToUDP(c.seal(pn, payload), c.peer)
+	}
 }
 
 // seal tạo gói hoàn chỉnh: header 12 byte (gửi rõ, làm AAD) + AES-GCM(payload) + tag 16 byte.

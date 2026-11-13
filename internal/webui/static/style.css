@@ -16,6 +16,7 @@ aside h2 { margin:0; padding:10px 12px; font-size:13px; text-transform:uppercase
 #users li:hover { background:var(--other); }
 #users li.me { color:#999; cursor:default; }
 #users li .dot { color:#2ecc71; margin-right:6px; }
+#users li .addr { display:block; margin-left:16px; font-size:11px; color:#999; font-family:ui-monospace,monospace; }
 
 #tabs { display:flex; gap:4px; padding:6px 8px; border-bottom:1px solid var(--line); overflow-x:auto; }
 .tab { border:1px solid var(--line); background:#fafafa; border-radius:14px; padding:3px 12px; cursor:pointer; white-space:nowrap; }

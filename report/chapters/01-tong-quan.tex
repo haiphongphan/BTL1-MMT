@@ -70,7 +70,7 @@ transport.
   cho mỗi handshake, deadline 10 s & \cref{subsec:handshake}, \cref{fig:seq-login} \\
   3 & Đăng nhập, quản lý trạng thái & \texttt{users.json} chỉ lưu \texttt{sha256(salt $\|$ pass)};
   \fname{Registry} (RWMutex) tra session theo tên và theo \texttt{conn\_id}, từ chối đăng nhập trùng ngay trong
-  lúc giữ khóa; server ghi đè \texttt{From} nên không giả danh được; danh sách online phát lại cho mọi người khi có
+  lúc giữ khóa; mỗi session giữ địa chỉ TCP lúc handshake và IP:port UDP thật (log và hiện trong danh sách user); server ghi đè \texttt{From} nên không giả danh được; danh sách online phát lại cho mọi người khi có
   người vào/ra & \cref{sec:kien-truc}, \cref{sec:bao-mat} \\
   4 & Concurrency & Transport: 1 goroutine sở hữu state của mỗi kết nối, giao tiếp qua channel. Server: mỗi
   session có goroutine đọc (\fname{serveSession}) và goroutine ghi (\fname{writeLoop}) với hàng đợi riêng, nên
@@ -86,8 +86,9 @@ transport.
   & \cref{subsec:song-chet}, \cref{subsec:state} \\
   8 & Bảo mật & ECDH X25519 + AES-256-GCM, header là AAD, nonce không bao giờ lặp & \cref{sec:bao-mat} \\
   9 & Giao diện HTTP + JS thuần & HTTP/1.1 tự viết trên \fname{net.Listen} (đọc request line, header,
-  \texttt{Content-Length}); trang HTML + JavaScript thuần poll \texttt{/api/events?since=N}; upload file bằng
-  \texttt{POST} thân thô; file tĩnh nhúng vào binary bằng \texttt{embed} & \cref{sec:kien-truc} \\
+  \texttt{Content-Length}); trang HTML + JavaScript thuần poll \texttt{/api/events?since=N}: tin nhắn theo tab,
+  danh sách user kèm IP:port, thanh tiến trình file ở cả bên gửi và bên nhận, thanh trạng thái mạng (RTT, cwnd,
+  mất gói); upload file bằng \texttt{POST} thân thô; file tĩnh nhúng vào binary bằng \texttt{embed} & \cref{sec:kien-truc} \\
   10 & Test, chất lượng code & \fname{go vet}, \fname{go test -race}; test đơn vị protocol/transport; test
   tích hợp server (\fname{FakePair}) và test hệ thống (server + 2 client thật qua UDP, loss 10\%); phép đo trên
   mạng giả lập & \cref{sec:kiem-thu} \\

@@ -30,7 +30,8 @@ handshake TCP lúc đăng nhập). Kiến trúc bên trong tầng transport (m�
     \node[box, minimum width=5.6cm] (mux) at (8.2,-7) {\fname{transport.Mux}: một socket UDP :9001\\\fname{readLoop} tách gói theo \texttt{conn\_id}};
     \node[grp, fit=(auth)(reg)(router)(mux)] (sv) {};
     \node[font=\bfseries, anchor=south west, gray!40!black] at (sv.north west) {Server};
-    \node[box, dashed, font=\scriptsize] (disc) at (8.2,-9.3) {\fname{StartDiscovery}: broadcast \texttt{COLLAB\_SERVER ip 9000 9001} lên :9002/UDP mỗi 2 s};
+    \node[box, dashed, font=\scriptsize] (disc) at (8.2,-9.3) {\fname{StartDiscovery}: broadcast \texttt{COLLAB\_SERVER ip tcp\_port udp\_port} lên :9002/UDP mỗi 2 s};
+    \draw[ar, dashed] (disc.west) -- node[lab] {\texttt{-server auto}: \fname{Discover}} (-3.1,-9.3) |- (core.west);
     % ----- Luồng -----
     \draw[dar] (browser) -- node[lab] {poll \texttt{/api/events} 400 ms\\\texttt{POST /api/send}, \texttt{/api/upload}} (webui);
     \draw[dar] (webui) -- node[lab] {gọi hàm, \fname{EventLog}} (core);
@@ -54,24 +55,28 @@ handshake TCP lúc đăng nhập). Kiến trúc bên trong tầng transport (m�
   \item Mỗi session có hai goroutine. \fname{serveSession} đọc \texttt{Recv()}, phân loại stream theo byte đầu:
         message thì gom tới FIN rồi định tuyến; file thì đọc meta ở đầu stream rồi chuyển tiếp từng mảnh sang
         goroutine \fname{relayFile} của file đó. \fname{writeLoop} là goroutine \emph{duy nhất} gọi
-        \texttt{SendMessage} cho session, đọc từ hàng đợi \texttt{sendCh} (64 tin): thứ tự gửi được giữ và một
-        người nhận chậm chỉ làm đầy hàng đợi của chính họ (\cref{subsec:app}).
+        \texttt{SendMessage} cho session, đọc từ hàng đợi \texttt{sendCh} (4096 tin): thứ tự gửi được giữ và một
+        người nhận chậm chỉ làm đầy hàng đợi của chính họ (\cref{subsec:app}). Một goroutine ngắn
+        \fname{watchPeer} chờ gói UDP đầu tiên của client để ghi log IP:port thật và phát lại danh sách user
+        kèm địa chỉ.
   \item \fname{Mux.readLoop} đọc socket UDP chung, tra \texttt{conn\_id} trong header rồi đẩy gói vào đúng
         \fname{Conn}; mỗi \fname{Conn} lại có goroutine \fname{run} riêng của tầng transport.
 \end{enumerate}
 \fname{Registry} là nguồn sự thật về ai đang online, bảo vệ bằng \texttt{RWMutex}. Mọi hàm của nó chỉ làm việc
 với map rồi thả khóa; việc gửi tin luôn làm sau khi đã thả khóa trên một bản sao danh sách (\fname{Snapshot}),
 nên không có goroutine nào bị kẹt trong khóa vì mạng chậm. Với 20 client, server có 4 goroutine cho mỗi client
-cộng vài goroutine nền, tổng 84 (\cref{tab:he-thong}).
+cộng vài goroutine nền, tổng 86 (\cref{tab:he-thong}).
 
-\paragraph{Client.} \fname{client/core} giữ \fname{Endpoint} hiện tại và một goroutine \fname{listenLoop} ghép
+\paragraph{Client.} Với \texttt{-server auto}, client nghe broadcast của server trên cổng 9002 (tối đa 5 s) và
+lấy IP từ địa chỉ nguồn của gói; socket bật \texttt{SO\_REUSEADDR}/\texttt{SO\_REUSEPORT} để nhiều client trên một
+máy dò cùng lúc được. \fname{client/core} giữ \fname{Endpoint} hiện tại và một goroutine \fname{listenLoop} ghép
 các stream nhận được, sắp lại tin theo \texttt{Seq} và ghi mọi sự kiện (chat, DM, danh sách user, tiến độ file,
 trạng thái kết nối) vào \fname{EventLog} có số thứ tự tăng dần. Khi \texttt{Done()} của kết nối đóng mà không
 phải do người dùng thoát, nó chuyển sang trạng thái \textsc{Reconnecting} và handshake lại (\cref{subsec:state}).
 \fname{webui} là HTTP/1.1 tự viết trên \fname{net.Listen}: mỗi kết nối một goroutine, đọc request line, các
 header tới dòng trống, thân qua \texttt{LimitReader(Content-Length)}; không dùng \fname{net/http}. Trang HTML, JS
 và CSS được nhúng vào binary bằng \texttt{embed}. Trình duyệt poll \texttt{/api/events?since=N} mỗi 400 ms và
-\texttt{/api/status} mỗi 1 s (RTT, cwnd, in-flight, tỉ lệ mất gói lấy từ \fname{transport.Stats}); vì sự kiện
+\texttt{/api/status} mỗi 1 s (địa chỉ server, RTT, cwnd, in-flight, tỉ lệ mất gói lấy từ \fname{transport.Stats}); vì sự kiện
 có số thứ tự, mở nhiều tab hay tải lại trang không làm mất hay trùng tin. Upload gửi thẳng nội dung file làm
 thân \texttt{POST /api/upload?to=\&name=}; \fname{webui} ghi ra file tạm rồi gọi \fname{SendFile} trong goroutine
 riêng, tiến độ gửi/nhận đi qua \fname{EventLog} thành thanh tiến trình.

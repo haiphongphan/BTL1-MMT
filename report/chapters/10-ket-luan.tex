@@ -16,13 +16,15 @@ và tự điều tốc, chỉ bằng thư viện chuẩn của Go:
 
 Ở tầng ứng dụng:
 \begin{itemize}
-  \item Server phục vụ 20 client đồng thời với số goroutine cố định (4 cho mỗi client, tổng 84) và bộ nhớ vài
-        MB; chat, tin riêng và file đi qua cùng một kết nối UDP, đúng người nhận, đúng thứ tự gửi nhờ
+  \item Server phục vụ 20 client đồng thời với số goroutine cố định (4 cho mỗi client, tổng 86) và bộ nhớ
+        ổn định khoảng 15 MB; chat, tin riêng và file đi qua cùng một kết nối UDP, đúng người nhận, đúng thứ tự gửi nhờ
         \texttt{Seq} ở tầng ứng dụng.
   \item File được chuyển tiếp theo kiểu pipeline nên bộ nhớ server không phụ thuộc kích thước file; người nhận
-        kiểm tra SHA-256 đầu cuối; tin chat gửi trong lúc truyền file 200 MB vẫn tới trong vài chục ms.
+        kiểm tra SHA-256 đầu cuối; tin chat gửi trong lúc truyền file 200 MB vẫn tới trong khoảng 0,1 s.
   \item Giao diện web chạy trên HTTP/1.1 tự viết với JavaScript thuần: danh sách user, tab chat chung và riêng,
         gửi file kèm thanh tiến trình ở cả hai đầu, trạng thái kết nối với RTT, cwnd và tỉ lệ mất gói.
+  \item Client tự tìm server trong LAN qua broadcast (\texttt{-server auto}); server theo dõi IP:port của từng
+        user và hiện trong danh sách user.
   \item Client tự kết nối lại khi server khởi động lại và báo \texttt{CLOSE} ngay khi thoát; server tắt bằng
         Ctrl+C cũng báo mọi client, nên không ai phải chờ idle timeout.
 \end{itemize}

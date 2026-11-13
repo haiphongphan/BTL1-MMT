@@ -227,8 +227,10 @@ không phải chờ. ACK cũ (tới sau ACK mới) không được ghi đè cử
   \item \textbf{Keep-alive:} không gửi gì trong 2 s thì gửi PING. PING cần ACK, nên hai bên luôn biết nhau còn sống.
   \item \textbf{Idle timeout:} không nhận được gói hợp lệ nào trong 10 s thì coi bên kia đã chết, đóng kết nối,
         báo cho ứng dụng qua \fname{Done()}.
-  \item \textbf{CLOSE:} đóng chủ động thì gửi CLOSE để bên kia biết ngay thay vì đợi 10 s. CLOSE gửi một lần,
-        không gửi lại: nếu mất thì bên kia vẫn tự đóng sau idle timeout.
+  \item \textbf{CLOSE:} đóng chủ động thì gửi CLOSE để bên kia biết ngay thay vì đợi 10 s. Kết nối đóng ngay
+        nên không chờ ACK để gửi lại; thay vào đó CLOSE được gửi 3 bản liên tiếp, mỗi bản một
+        \texttt{packet\_num} mới (ở loss 10\% xác suất mất cả 3 là 0,1\%). Nếu mất hết thì bên kia vẫn tự đóng
+        sau idle timeout.
   \item \textbf{PING đầu tiên:} server chỉ biết địa chỉ UDP của client khi nhận được gói đầu tiên của client.
         Client gửi lại PING đầu sau 200, 400, 800 ms\dots{} (tối đa 2 s) tới khi nghe được server
         (thử thách~\ref{tt:ping-dau}).

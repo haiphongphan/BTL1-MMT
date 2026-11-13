@@ -14,6 +14,9 @@ const (
 )
 
 // onFileData xử lý 1 Delivery của stream file: đọc header → mở relay → chuyển tiếp từng mảnh.
+// Server không giữ cả file: mỗi mảnh được chuyển ngay sang goroutine relayFile qua kênh có giới hạn
+// (relayBuffer). Người nhận chậm làm kênh đầy, vòng đọc của người gửi bị chặn, cửa sổ nhận của transport
+// đầy theo và người gửi tự chậm lại (điều khiển luồng đầu cuối).
 func (s *Server) onFileData(sess *Session, st *inStream, d transport.Delivery) {
 	switch {
 	case st.drop:
@@ -55,6 +58,7 @@ func (s *Server) onFileData(sess *Session, st *inStream, d transport.Delivery) {
 	}
 }
 
+// fileTargets: to rỗng = gửi cho mọi người đang online trừ người gửi; ngược lại đúng một người.
 func (s *Server) fileTargets(from *Session, to string) []*Session {
 	var out []*Session
 	for _, t := range s.reg.Snapshot() {
@@ -65,12 +69,14 @@ func (s *Server) fileTargets(from *Session, to string) []*Session {
 	return out
 }
 
+// relayFile mở một stream bulk tới từng người nhận, ghi meta (đã ghi đè From) rồi chuyển tiếp từng mảnh
+// nhận từ ch. Một người nhận lỗi giữa chừng thì chỉ bỏ người đó. Thoát khi ch bị đóng (FIN hoặc người gửi rớt).
 func (s *Server) relayFile(meta protocol.FileMeta, targets []*Session, ch <-chan []byte) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[Server] Panic khi relay file '%s': %v", meta.Name, r)
 		}
-		for range ch {
+		for range ch { // xả kênh để serveSession của người gửi không bị chặn
 		}
 	}()
 

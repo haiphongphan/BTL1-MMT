@@ -46,11 +46,11 @@
         trước tin ``1'' ngay cả khi không mất gói. \emph{Giải pháp:} mỗi session một hàng đợi \texttt{sendCh} và
         đúng một goroutine \fname{writeLoop} gọi \texttt{SendMessage}; test gửi 20 tin liên tiếp kiểm tra thứ tự.
   \item \textbf{Một người nhận chậm làm kẹt cả server.} Nếu gửi trong lúc còn giữ khóa \fname{Registry}, hoặc
-        ghi vào hàng đợi theo kiểu chặn, một client treo (ví dụ trình duyệt đóng, cửa sổ nhận về 0) giữ luôn
-        goroutine của những người khác. \emph{Giải pháp:} \fname{Snapshot} danh sách rồi thả khóa mới gửi; ghi
-        vào \texttt{sendCh} bằng \texttt{select} có \texttt{default}, đầy thì bỏ tin và ghi log. Hệ quả là phải
-        cấp \texttt{Seq} trong \fname{writeLoop} chứ không phải lúc xếp hàng, để tin bị bỏ không tạo chỗ trống
-        làm \fname{SeqBuffer} phía client chờ mãi (\cref{subsec:app}).
+        ghi vào hàng đợi theo kiểu chặn, một client treo (cửa sổ nhận về 0) giữ luôn goroutine của những người
+        khác. Bản đầu sửa bằng cách bỏ tin khi hàng đợi đầy, nhưng như vậy là mất tin lặng lẽ và để lại chỗ
+        trống \texttt{Seq}. \emph{Giải pháp:} \fname{Snapshot} danh sách rồi thả khóa mới gửi; ghi vào
+        \texttt{sendCh} (4096 tin) bằng \texttt{select} có \texttt{default}; đầy thì ngắt riêng client quá chậm
+        đó, client tự kết nối lại (\cref{subsec:app}).
   \item \textbf{Đăng nhập trùng lọt qua khi hai client cùng tên đến cùng lúc.} ``Kiểm tra đã online chưa'' rồi
         ``thêm vào registry'' là hai lần khóa riêng, giữa hai lần đó client kia chen vào được. \emph{Giải pháp:}
         \fname{AddPending} kiểm tra và thêm trong cùng một lần giữ khóa, trả \texttt{ErrAlreadyOnline}.
@@ -74,6 +74,13 @@
         không gửi \texttt{CLOSE}, server và những người khác phải chờ 10 s mới thấy user rời đi; thêm bắt tín hiệu
         ở cả client lẫn server (server đóng \fname{Mux} để gửi \texttt{CLOSE} cho mọi client) thì chỉ còn
         0,1--0,2 s (\cref{tab:he-thong}).
+  \item \textbf{Tự tìm server trong LAN.} Broadcast ban đầu ghi cứng cổng 9000 và IP do server tự đoán (sai khi
+        máy có nhiều card mạng). \emph{Giải pháp:} server ghi cổng TCP thật; client lấy IP từ địa chỉ nguồn của gói
+        broadcast. Nhiều client trên một máy cùng nghe cổng 9002 thì lần bind thứ hai lỗi, nên socket phải bật
+        \texttt{SO\_REUSEADDR}/\texttt{SO\_REUSEPORT} (mã riêng cho Windows và Unix bằng build tag).
+  \item \textbf{Cờ giả lập mạng ``chạy'' mà không có tác dụng.} \texttt{-jitter} được nhận nhưng không gán vào
+        \fname{LossyConn}; phát hiện khi RTT đo được vẫn 0,1 ms. Bài học giống thử thách~\ref{tt:jitter}: luôn
+        kiểm tra bộ giả lập bằng số đo (RTT, tỉ lệ mất) trước khi tin kết quả.
   \item \textbf{Web UI không có \fname{net/http}.} Phải tự đọc request line và header, xử lý
         \texttt{Content-Length} cho cả JSON nhỏ lẫn file hàng trăm MB (thân đọc thẳng ra file tạm, không vào
         RAM), và trả \texttt{Connection: close} để không phải cài keep-alive. Trình duyệt không được server dội

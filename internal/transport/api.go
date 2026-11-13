@@ -23,6 +23,7 @@ type Stats struct {
 	LostPkts uint64        // số gói bị coi là mất (đã gửi lại)
 	SentPkts uint64        // tổng số gói đã gửi, kể cả gói chỉ có ACK/PING
 	State    string        // "waiting" (server chưa biết địa chỉ client) | "connected" | "closed"
+	Peer     string        // địa chỉ UDP "ip:port" của bên kia ("" khi server chưa nhận gói nào của client)
 }
 
 // Endpoint là những gì tầng app cần từ tầng transport. Có 2 bản cài đặt: *Conn (UDP thật) và

@@ -114,6 +114,8 @@ người kia thấy danh sách cập nhật. Tất cả chạy trong \texttt{go 
 
 Bảng dưới là các kịch bản chạy bằng binary thật (server, client với Web UI, gọi qua \texttt{/api}) trên macOS
 (Apple Silicon), Go 1.27, loopback, mỗi bên \texttt{-loss 0.1} trừ khi ghi khác; đo ngày 13/11/2026.
+Test tích hợp \fname{TestSlowReceiverIsDisconnected} kiểm tra thêm trường hợp người nhận không đọc: người gửi
+không bị chặn, chỉ người nhận đó bị ngắt.
 
 \begin{longtable}{c L{0.27\linewidth} L{0.6\linewidth}}
   \caption{Test hệ thống với server và client thật}\label{tab:he-thong} \\
@@ -127,27 +129,33 @@ Bảng dưới là các kịch bản chạy bằng binary thật (server, client
   \endhead
   1 & 3 client: chat chung, DM, DM tới user offline & 20 tin liên tiếp tới cả hai người kia đúng thứ tự; người
   gửi không nhận lại tin mình; DM chỉ người nhận thấy, \texttt{From} do server đặt; DM tới user không online
-  nhận \texttt{error} ``User 'zed' hiện không online'' \\
-  2 & Loss 20\% mỗi chiều + jitter 30 ms, 50 chat liên tiếp & Nhận đủ 50/50, đúng thứ tự, không trùng, trong
-  1,0 s; transport báo 18,7\% gói phải gửi lại \\
-  3 & File 1 KB / 10 MB / 200 MB, loss 10\% & SHA-256 khớp cả ba; 1 KB: 0,06 s; 10 MB: 7,4 s (1,4 MB/s);
-  200 MB: 121 s (1,65 MB/s); bộ nhớ server không tăng theo kích thước file \\
-  4 & DM gửi trong lúc file 200 MB đang truyền & DM tới người nhận sau \textbf{57 ms}, không chờ file
+  nhận \texttt{error} ``User 'zed' hiện không online''; danh sách user kèm IP:port UDP của từng người \\
+  2 & Loss 10\% và 20\% mỗi chiều, jitter 30 ms, 50 chat liên tiếp & Cả hai trường hợp nhận đủ 50/50, đúng thứ tự,
+  không trùng; tin cuối tới sau 0,26 s và 0,20 s; RTT đo được 42,6 và 41,1 ms; transport báo 8,8\% và 15,5\% gói
+  phải gửi lại \\
+  3 & File 1 KB / 10 MB / 200 MB, loss 10\% & SHA-256 khớp cả ba; 1 KB: 0,06 s; 10 MB: 7,2 s (1,46 MB/s);
+  200 MB: 133 s (1,51 MB/s). Thanh tiến trình bên gửi nhận 29 cập nhật tăng dần cho file 10 MB; bộ nhớ server
+  không tăng theo kích thước file \\
+  4 & DM gửi trong lúc file 200 MB đang truyền & DM tới người nhận sau \textbf{108 ms}, không chờ file
   (\cref{sec:hol}) \\
-  5 & Ctrl+C một client; \texttt{kill -9} một client khác & Ctrl+C: client gửi \texttt{CLOSE}, người còn lại thấy
-  danh sách cập nhật sau \textbf{0,05 s}; \texttt{kill -9}: không có \texttt{CLOSE}, phát hiện bằng idle timeout
-  sau 9,97 s; cả hai đăng nhập lại được ngay \\
-  6 & Ctrl+C server rồi bật lại & Server gửi \texttt{CLOSE} cho mọi client, client sang \textsc{Reconnecting} sau
-  0,05 s; server bật lại thì client \textsc{Connected} sau 1,0 s (lần thử đầu của backoff) \\
+  5 & Ctrl+C một client (lặp 10 lần); \texttt{kill -9} một client khác & Ctrl+C: client gửi \texttt{CLOSE},
+  người còn lại thấy danh sách cập nhật sau \textbf{$\le$ 0,06 s} cả 10 lần; \texttt{kill -9}: không có
+  \texttt{CLOSE}, phát hiện bằng idle timeout sau 9,98 s; cả hai đăng nhập lại được ngay \\
+  6 & Ctrl+C server (lặp 10 lần) rồi bật lại & Server gửi \texttt{CLOSE} cho mọi client, client sang
+  \textsc{Reconnecting} sau $\le$ 0,06 s cả 10 lần; server bật lại thì client \textsc{Connected} sau 1,0 s (lần
+  thử đầu của backoff) \\
   7 & Sai mật khẩu / user lạ / đăng nhập trùng & \texttt{AUTH\_FAIL} cả ba: hai trường hợp đầu cùng lý do ``tài
   khoản hoặc mật khẩu không chính xác'', trùng thì ``tài khoản đang online ở máy khác'' \\
   8 & Gói rác: 200 gói UDP ngẫu nhiên 1--1400 byte vào 9001; TCP gửi độ dài sai và JSON hỏng vào 9000 & Server
   không crash, không log lỗi; client đang nối vẫn \texttt{connected}; handshake treo bị cắt sau 10 s \\
   9 & 20 client bot, loss 10\%, 60 s & \textbf{86 goroutine} (4 cho mỗi client + nền) không đổi suốt thời gian
-  chạy, heap 1,1--2,8 MB (GC dao động); mỗi client nhận $\approx$ 550 tin/phút, 0 lỗi, hàng đợi gửi không bao
-  giờ đầy; tắt 20 client thì server xóa đủ session \\
+  chạy; heap 12--16 MB, không tăng dần (phần lớn là 20 hàng đợi gửi 4096 chỗ được cấp phát trước, $\approx$
+  0,5 MB mỗi hàng đợi); CPU server 4,4\%; mỗi client nhận $\approx$ 570 tin/phút, 0 lỗi, không hàng đợi nào
+  đầy; server log IP:port của đủ 20 client và xóa đủ 20 session khi tắt \\
   10 & Wireshark trên 9000/TCP và 9001/UDP & Chỉ thấy base64 của \texttt{sealed} trong \texttt{AUTH}; payload
   UDP không đọc được (\cref{sec:bao-mat}) \\
+  11 & Tự tìm server: 3 client trên cùng máy chạy \texttt{-server auto} đồng thời & Cả 3 tìm thấy server sau
+  $\approx$ 40 ms, đúng cổng TCP server đang dùng (không phải giá trị mặc định) \\
   \bottomrule
 \end{longtable}
 

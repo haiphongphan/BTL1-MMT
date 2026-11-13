@@ -1,3 +1,5 @@
+// Server: nhận đăng nhập qua TCP (:9000), phục vụ mọi client qua một socket UDP tin cậy (:9001),
+// phát broadcast discovery lên :9002. File này chỉ đọc cờ và lắp ráp các thành phần trong internal/server.
 package main
 
 import (
@@ -8,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -46,8 +49,14 @@ func main() {
 		log.Fatalf("Mở UDP thất bại: %v", err)
 	}
 
-	go srv.StartDiscovery(context.Background(), localIP())
-	go logRunTime(10 * time.Second)
+	tcpPort := 9000
+	if _, p, err := net.SplitHostPort(*tcpAddr); err == nil {
+		if n, err := strconv.Atoi(p); err == nil {
+			tcpPort = n
+		}
+	}
+	go srv.StartDiscovery(context.Background(), localIP(), tcpPort)
+	go logRunTime(srv, 10*time.Second)
 
 	// Ctrl+C: gửi CLOSE cho mọi client rồi mới thoát, để client chuyển sang "reconnecting" ngay
 	// thay vì chờ idle timeout 10 s.
@@ -65,14 +74,17 @@ func main() {
 	}
 }
 
-func logRunTime(every time.Duration) {
+// logRunTime in số goroutine, bộ nhớ heap và số user online định kỳ: khi test tải, các số này phải ổn
+// định theo số client chứ không tăng mãi (dấu hiệu rò goroutine/bộ nhớ).
+func logRunTime(srv *server.Server, every time.Duration) {
 	var m runtime.MemStats
 	for range time.Tick(every) {
 		runtime.ReadMemStats(&m)
-		log.Printf("[Runtime] goroutines=%d heap=%.1fMB", runtime.NumGoroutine(), float64(m.HeapAlloc)/1e6)
+		log.Printf("[Runtime] goroutines=%d heap=%.1fMB online=%d", runtime.NumGoroutine(), float64(m.HeapAlloc)/1e6, srv.Online())
 	}
 }
 
+// localIP trả về IP LAN của máy (IP của interface đi ra ngoài; không gửi gói nào thật).
 func localIP() string {
 	c, err := net.Dial("udp4", "8.8.8.8:80")
 	if err != nil {
