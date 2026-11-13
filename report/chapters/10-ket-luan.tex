@@ -21,19 +21,17 @@ nhắn tin riêng, truyền file) chạy trên giao thức tùy chỉnh trên n�
 
 Ở tầng ứng dụng và giao diện:
 \begin{itemize}
-  \item Server phục vụ ổn định 20 client kết nối đồng thời với số lượng goroutine cố định (4 goroutine cho mỗi
-        client, tổng cộng 84--86 goroutine) và mức tiêu thụ RAM chỉ vài MB; các luồng chat chung, DM và file cùng
-        chia sẻ một kết nối UDP duy nhất nhưng vẫn đến đúng người nhận và giữ đúng thứ tự nhờ bộ đệm
-        \fname{SeqBuffer}.
-  \item Luồng truyền file qua server hoạt động theo kiểu cuốn chiếu (pipeline) nên dung lượng bộ nhớ của server
-        không bị phình theo kích thước file; phía nhận tự động kiểm tra mã băm SHA-256 đầu-cuối; tin nhắn DM gửi
-        xen trong lúc đang truyền file 200 MB vẫn tới đích chỉ sau vài chục ms.
-  \item Giao diện web được phục vụ bởi HTTP/1.1 server tự viết kết hợp JavaScript thuần, hỗ trợ đầy đủ danh sách
-        online, chuyển tab chat chung/riêng, thanh tiến trình gửi/nhận file theo thời gian thực và bảng theo dõi
-        thông số mạng (RTT, cwnd, tỉ lệ mất gói).
-  \item Cả client và server đều xử lý tốt các tình huống đứt mạng: client tự động kết nối lại theo exponential
-        backoff khi server khởi động lại, và cả hai phía đều bắt tín hiệu Ctrl+C để gửi gói \texttt{CLOSE} giúp
-        cập nhật trạng thái thoát ngay lập tức thay vì phải chờ hết idle timeout.
+  \item Server phục vụ 20 client đồng thời với số goroutine cố định (4 cho mỗi client, tổng 86) và bộ nhớ
+        ổn định khoảng 15 MB; chat, tin riêng và file đi qua cùng một kết nối UDP, đúng người nhận, đúng thứ tự gửi nhờ
+        \texttt{Seq} ở tầng ứng dụng.
+  \item File được chuyển tiếp theo kiểu pipeline nên bộ nhớ server không phụ thuộc kích thước file; người nhận
+        kiểm tra SHA-256 đầu cuối; tin chat gửi trong lúc truyền file 200 MB vẫn tới trong khoảng 0,1 s.
+  \item Giao diện web chạy trên HTTP/1.1 tự viết với JavaScript thuần: danh sách user, tab chat chung và riêng,
+        gửi file kèm thanh tiến trình ở cả hai đầu, trạng thái kết nối với RTT, cwnd và tỉ lệ mất gói.
+  \item Client tự tìm server trong LAN qua broadcast (\texttt{-server auto}); server theo dõi IP:port của từng
+        user và hiện trong danh sách user.
+  \item Client tự kết nối lại khi server khởi động lại và báo \texttt{CLOSE} ngay khi thoát; server tắt bằng
+        Ctrl+C cũng báo mọi client, nên không ai phải chờ idle timeout.
 \end{itemize}
 
 \subsection{Hướng phát triển}

@@ -14,13 +14,14 @@ import (
 	"github.com/phongphanhai06/go-collab/internal/transport"
 )
 
-const pendingTimeout = 15 * time.Second
-
+// UserAccount là một dòng trong users.json. Không lưu mật khẩu, chỉ lưu hash có salt riêng cho từng user.
 type UserAccount struct {
 	Salt string `json:"salt"`
-	Hash string `json:"hash"` // sha256(salt + password)
+	Hash string `json:"hash"` // hex(sha256(salt + password))
 }
 
+// Server gồm: danh sách tài khoản, registry các session đang online, và Mux của tầng transport
+// (một socket UDP chung cho mọi client, tách gói theo conn_id).
 type Server struct {
 	reg        *Registry
 	users      map[string]UserAccount
@@ -29,6 +30,7 @@ type Server struct {
 	mux        *transport.Mux
 }
 
+// NewServer đọc users.json và tạo server (chưa mở socket nào).
 func NewServer(usersFilePath string, udpPort int) (*Server, error) {
 	data, err := os.ReadFile(usersFilePath)
 	if err != nil {
@@ -44,10 +46,12 @@ func NewServer(usersFilePath string, udpPort int) (*Server, error) {
 		users:   users,
 		udpPort: udpPort,
 	}
-	srv.nextConnID.Store(1000) // Khởi tạo ID bắt đầu từ 1000
+	srv.nextConnID.Store(1000) // conn_id bắt đầu từ 1001
 	return srv, nil
 }
 
+// ListenUDP mở socket UDP dữ liệu. loss/jitter > 0 thì bọc socket bằng LossyConn để giả lập mạng xấu
+// ở chiều gửi của server (demo độ tin cậy trên localhost).
 func (s *Server) ListenUDP(loss float64, jitter time.Duration) error {
 	sock, err := net.ListenUDP("udp", &net.UDPAddr{Port: s.udpPort})
 	if err != nil {
@@ -55,13 +59,15 @@ func (s *Server) ListenUDP(loss float64, jitter time.Duration) error {
 	}
 	var pc transport.PacketConn = sock
 	if loss > 0 || jitter > 0 {
-		pc = &transport.LossyConn{UDPConn: sock, Loss: loss}
+		pc = &transport.LossyConn{UDPConn: sock, Loss: loss, Jitter: jitter}
 	}
 	s.mux = transport.NewMux(pc)
-	log.Printf("[Server] UDP transport running on :%d (loss %.0f%%)", s.udpPort, loss*100)
+	log.Printf("[Server] UDP transport running on :%d (loss %.0f%%, jitter %v)", s.udpPort, loss*100, jitter)
 	return nil
 }
 
+// ListenTCP nhận kết nối handshake; mỗi kết nối được xử lý trong một goroutine riêng nên một client
+// chậm/treo không chặn người khác đăng nhập.
 func (s *Server) ListenTCP(addr string) error {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -75,22 +81,24 @@ func (s *Server) ListenTCP(addr string) error {
 			log.Printf("[Server] Accept err: %v", err)
 			continue
 		}
-		go s.handleHandshake(conn) // Mỗi client 1 goroutine độc lập
+		go s.handleHandshake(conn)
 	}
 }
 
+// handleHandshake chạy HELLO → KEYX → AUTH → AUTH_OK/AUTH_FAIL trên một kết nối TCP (docs/protocol.md 3.2).
+// Thành công thì tạo kết nối transport cho conn_id mới và đóng TCP; mọi dữ liệu sau đó đi qua UDP.
 func (s *Server) handleHandshake(c net.Conn) {
 	defer c.Close()
-	c.SetDeadline(time.Now().Add(10 * time.Second)) // Timeout chống treo goroutine
+	c.SetDeadline(time.Now().Add(10 * time.Second)) // client im lặng giữa chừng không giữ goroutine mãi
 
-	// Step 1: Nhận HELLO
+	// 1. HELLO: khóa công khai X25519 của client
 	var hello protocol.Hello
 	if err := protocol.ReadMsg(c, &hello); err != nil {
 		log.Printf("[Server] Read HELLO err: %v", err)
 		return
 	}
 
-	// Sinh khóa ECDH
+	// Sinh cặp khóa của server, tính k_tcp (mã hóa AUTH) và k_udp (mã hóa mọi gói UDP)
 	priv, err := transport.NewKeyPair()
 	if err != nil {
 		return
@@ -103,7 +111,7 @@ func (s *Server) handleHandshake(c net.Conn) {
 		return
 	}
 
-	// Step 2: Gửi KEYX
+	// 2. KEYX: khóa công khai của server, conn_id và cổng UDP
 	keyx := protocol.KeyX{
 		Type:      "KEYX",
 		ServerPub: priv.PublicKey().Bytes(),
@@ -114,23 +122,20 @@ func (s *Server) handleHandshake(c net.Conn) {
 		return
 	}
 
-	// Step 3: Nhận AUTH
+	// 3. AUTH: {user, pass} đã mã hóa AES-GCM bằng k_tcp
 	var auth protocol.Auth
 	if err := protocol.ReadMsg(c, &auth); err != nil {
 		return
 	}
-
 	aead, err := transport.NewAEAD(kTCP)
 	if err != nil {
 		return
 	}
-
 	plain, err := aead.Open(nil, auth.Nonce, auth.Sealed, nil)
 	if err != nil {
 		protocol.WriteMsg(c, protocol.AuthResult{Type: "AUTH_FAIL", Reason: "Giải mã thông tin thất bại"})
 		return
 	}
-
 	var cred struct {
 		User string `json:"user"`
 		Pass string `json:"pass"`
@@ -139,19 +144,21 @@ func (s *Server) handleHandshake(c net.Conn) {
 		return
 	}
 
-	// Step 4: Kiểm tra Auth & Trùng lặp
+	// 4. Kiểm tra mật khẩu và đăng nhập trùng. User lạ và sai mật khẩu trả cùng một lý do để không lộ
+	// user nào tồn tại.
 	if !s.checkPassword(cred.User, cred.Pass) {
 		protocol.WriteMsg(c, protocol.AuthResult{Type: "AUTH_FAIL", Reason: "Tài khoản hoặc mật khẩu không chính xác"})
 		return
 	}
-
-	sess, err := s.reg.AddPending(cred.User, connID, kUDP)
+	sess, err := s.reg.AddPending(cred.User, connID, c.RemoteAddr().String())
 	if err != nil {
 		protocol.WriteMsg(c, protocol.AuthResult{Type: "AUTH_FAIL", Reason: "Tài khoản đang online ở máy khác"})
 		return
 	}
 	log.Printf("[Server] User '%s' authenticated from %s (ConnID: %d)", cred.User, c.RemoteAddr(), connID)
 
+	// Tạo kết nối transport ngay (trước khi trả AUTH_OK) để PING đầu tiên của client tới là có người nhận.
+	// Nếu client không bao giờ gửi UDP, idle timeout 10 s của transport đóng kết nối và dọn session.
 	conn, err := s.mux.Accept(connID, kUDP)
 	if err != nil {
 		s.reg.Remove(sess)
@@ -160,7 +167,7 @@ func (s *Server) handleHandshake(c net.Conn) {
 	}
 	s.AttachEndpoint(connID, conn)
 
-	// Trả AUTH_OK
+	// 5. AUTH_OK kèm danh sách user đang online
 	protocol.WriteMsg(c, protocol.AuthResult{
 		Type:  "AUTH_OK",
 		Users: s.reg.Names(),
@@ -175,6 +182,7 @@ func (s *Server) Close() {
 	}
 }
 
+// checkPassword so sha256(salt ‖ password) với hash đã lưu.
 func (s *Server) checkPassword(username, password string) bool {
 	acc, ok := s.users[username]
 	if !ok {

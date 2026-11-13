@@ -298,23 +298,16 @@ có số thứ tự cũ hơn sẽ không được phép ghi đè giá trị \tex
 Vì UDP là giao thức không kết nối (connectionless), socket UDP sẽ không tự báo lỗi khi máy bên kia rút dây mạng
 hay tắt đột ngột. Do đó nhóm tự quản lý trạng thái sống/chết của kết nối qua các quy tắc sau:
 \begin{itemize}
-  \item \textbf{Keep-alive:} nếu sau 2 giây mà kết nối không gửi gói dữ liệu nào đi, \fname{run()} sẽ tự động gửi
-        một gói PING. Vì frame PING yêu cầu bên kia phải trả lời bằng ACK \cite{rfc9000}, cả hai đầu luôn duy trì được tín hiệu
-        nhận biết nhau.
-  \item \textbf{Idle timeout} \cite{rfc9000}: nếu trong suốt 10 giây liên tục không nhận được bất kỳ gói UDP hợp lệ nào (đã qua
-        xác thực GCM) từ phía bên kia, kết nối được coi là đã đứt, tự động chuyển sang trạng thái đóng và đóng
-        channel \fname{Done()} để báo cho tầng ứng dụng.
-  \item \textbf{Frame CLOSE:} khi người dùng chủ động thoát hoặc tắt server, bên đóng sẽ bắn một gói chứa frame
-        CLOSE để đầu kia giải phóng phiên ngay lập tức thay vì phải chờ hết 10 giây timeout. Gói CLOSE chỉ gửi
-        một lần mà không cần chờ ACK; chẳng may gói CLOSE này bị rớt trên mạng thì phía bên kia vẫn sẽ tự đóng
-        sau 10 giây nhờ idle timeout.
-  \item \textbf{Truyền lại PING đầu tiên:} sau khi xong bước handshake TCP, server chưa hề biết IP:port UDP của
-        client cho tới khi nhận được gói UDP đầu tiên từ client gửi lên. Để tránh việc gói PING mở màn này bị rớt
-        trên mạng làm hai bên không liên lạc được, client sẽ chủ động gửi lại gói PING đầu theo chu kỳ 200, 400,
-        800 ms\dots{} (tối đa 2 s) cho tới khi nhận được gói phản hồi đầu tiên từ server (thử
-        thách~\ref{tt:ping-dau}).
-  \item \textbf{Bỏ qua gói hỏng/giả mạo:} mọi gói UDP có magic/version sai, mang \texttt{conn\_id} lạ, dữ liệu
-        frame bị cắt cụt, mã \texttt{type} không hợp lệ hoặc giải mã AES-GCM thất bại đều bị loại bỏ ngay. Chương
-        trình không bị panic và cũng không tự đóng kết nối hiện tại, tránh trường hợp có gói rác hoặc gói giả mạo
-        bắn vào cổng UDP làm rớt kết nối của người dùng đang online.
+  \item \textbf{Keep-alive:} không gửi gì trong 2 s thì gửi PING. PING cần ACK, nên hai bên luôn biết nhau còn sống.
+  \item \textbf{Idle timeout:} không nhận được gói hợp lệ nào trong 10 s thì coi bên kia đã chết, đóng kết nối,
+        báo cho ứng dụng qua \fname{Done()}.
+  \item \textbf{CLOSE:} đóng chủ động thì gửi CLOSE để bên kia biết ngay thay vì đợi 10 s. Kết nối đóng ngay
+        nên không chờ ACK để gửi lại; thay vào đó CLOSE được gửi 3 bản liên tiếp, mỗi bản một
+        \texttt{packet\_num} mới (ở loss 10\% xác suất mất cả 3 là 0,1\%). Nếu mất hết thì bên kia vẫn tự đóng
+        sau idle timeout.
+  \item \textbf{PING đầu tiên:} server chỉ biết địa chỉ UDP của client khi nhận được gói đầu tiên của client.
+        Client gửi lại PING đầu sau 200, 400, 800 ms\dots{} (tối đa 2 s) tới khi nghe được server
+        (thử thách~\ref{tt:ping-dau}).
+  \item \textbf{Gói hỏng:} sai magic/version, \texttt{conn\_id} lạ, frame cụt, type lạ, giải mã thất bại: bỏ gói,
+        không panic, không đóng kết nối. Kẻ gửi rác không thể làm ngắt kết nối của người khác.
 \end{itemize}

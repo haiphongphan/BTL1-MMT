@@ -1,3 +1,5 @@
+// Client: đăng nhập vào server, mở Web UI trên 127.0.0.1 và CLI trong terminal. File này chỉ đọc cờ và lắp
+// ráp internal/client (mạng) + internal/webui (giao diện).
 package main
 
 import (
@@ -17,6 +19,7 @@ import (
 	"github.com/phongphanhai06/go-collab/internal/webui"
 )
 
+// runBot gửi chat tự động mỗi 1–3 s, dùng cho test tải (scripts/run_clients.sh).
 func runBot(c *client.Client) {
 	for i := 1; ; i++ {
 		time.Sleep(time.Second + time.Duration(rand.IntN(2000))*time.Millisecond)
@@ -27,7 +30,7 @@ func runBot(c *client.Client) {
 }
 
 func main() {
-	serverAddr := flag.String("server", "127.0.0.1:9000", "Server TCP Address")
+	serverAddr := flag.String("server", "127.0.0.1:9000", "Địa chỉ TCP của server, hoặc \"auto\" để tự tìm server trong LAN (broadcast cổng 9002)")
 	username := flag.String("user", "phong", "Username")
 	password := flag.String("pass", "123456", "Password")
 	ccLogPath := flag.String("cclog", "", "Ghi diễn biến cwnd ra file CSV (vẽ đồ thị: go run ./scripts/plotcc file.csv > cwnd.svg)")
@@ -48,6 +51,16 @@ func main() {
 			log.Fatalf("Mở file cclog thất bại: %v", err)
 		}
 		defer closeLog()
+	}
+
+	if *serverAddr == "auto" {
+		fmt.Println("🔎 Đang tìm server trong LAN (UDP :9002)...")
+		addr, err := client.Discover(5 * time.Second)
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Println("🔎 Tìm thấy server:", addr)
+		*serverAddr = addr
 	}
 
 	c := client.NewClient(*username)
@@ -79,7 +92,7 @@ func main() {
 		go runBot(c)
 	}
 
-	// Loop in Event ra console
+	// In event ra console (Web UI đọc cùng EventLog này qua /api/events)
 	go func() {
 		var lastSeq int64
 		for {
@@ -92,8 +105,8 @@ func main() {
 		}
 	}()
 
-	// Đọc CLI input
-	fmt.Println("Lệnh: /msg <text> | /dm <user> <text> | /users | /quit  (gõ thẳng = /msg)")
+	// Đọc lệnh CLI
+	fmt.Println("Lệnh: /msg <text> | /dm <user> <text> | /file <đường-dẫn> [user] | /users | /quit  (gõ thẳng = /msg)")
 	scanner := bufio.NewScanner(os.Stdin)
 	fmt.Print("> ")
 	for scanner.Scan() {
@@ -116,7 +129,7 @@ func main() {
 		case strings.HasPrefix(line, "/msg "):
 			err = c.SendChat(strings.TrimPrefix(line, "/msg "))
 		case strings.HasPrefix(line, "/file "):
-			parts := strings.Fields(line)
+			parts := strings.Fields(line) // /file <đường-dẫn> [user]; không có user = gửi mọi người
 			to := ""
 			if len(parts) >= 3 {
 				to = parts[2]
@@ -137,15 +150,10 @@ func main() {
 		}
 		fmt.Print("> ")
 	}
-	if *web != "" {
-		fmt.Println("CLI đóng, Web UI vẫn chạy. Ctrl+C để thoát.")
-		select {}
-	}
-	c.Close()
-
+	// Hết stdin (chạy nền với < /dev/null): còn Web UI hoặc bot thì giữ process sống, không thì thoát.
 	if *web != "" || *bot {
 		fmt.Println("CLI đóng, Web UI/bot vẫn chạy. Ctrl+C để thoát.")
 		select {}
 	}
-
+	c.Close()
 }

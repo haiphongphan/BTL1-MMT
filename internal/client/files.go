@@ -17,11 +17,14 @@ import (
 	"github.com/phongphanhai06/go-collab/internal/transport"
 )
 
+// progressEvery: tối đa 5 sự kiện tiến độ mỗi giây cho mỗi file, đủ mượt cho thanh tiến trình mà không
+// làm đầy EventLog.
 const progressEvery = 200 * time.Millisecond
 
+// FileProgress là dữ liệu của các sự kiện file_start / file_progress / file_done (cả chiều gửi và nhận).
 type FileProgress struct {
 	ID       string `json:"id"`
-	Dir      string `json:"dir"`
+	Dir      string `json:"dir"` // "out" = mình gửi, "in" = mình nhận
 	From     string `json:"from"`
 	Name     string `json:"name"`
 	Path     string `json:"path,omitempty"`
@@ -29,6 +32,9 @@ type FileProgress struct {
 	Size     int64  `json:"size"`
 }
 
+// SendFile gửi file cho một người (to rỗng = mọi người). Đọc file 2 lượt: lượt 1 tính SHA-256 vì meta (có
+// hash) phải đi trước dữ liệu trong cùng stream; lượt 2 gửi, transport tự cắt ≤ 1000 byte/frame. Dùng stream
+// ưu tiên thấp (bulk) nên chat vẫn đi trước. Hàm chặn tới khi gửi xong; tiến độ báo qua EventLog.
 func (c *Client) SendFile(path, to string) error {
 	ep := c.endpoint()
 	if ep == nil {
@@ -72,7 +78,9 @@ func (c *Client) SendFile(path, to string) error {
 	if _, err := st.Write(hdr); err != nil {
 		return err
 	}
-	if _, err := io.Copy(st, f); err != nil { // lượt 2: gửi, transport tự cắt ≤1000 byte/frame
+	// lượt 2: gửi qua progressReader để thanh tiến trình bên gửi chạy. Write của stream bulk bị chặn khi hàng
+	// đợi transport đầy, nên tốc độ đọc file = tốc độ mạng thật, và tiến độ phản ánh đúng.
+	if _, err := io.Copy(st, pr); err != nil {
 		c.Events.Add("file_error", fmt.Sprintf("gửi '%s' lỗi: %v", meta.Name, err))
 		return err
 	}
@@ -80,10 +88,12 @@ func (c *Client) SendFile(path, to string) error {
 		return err
 	}
 
+	pr.p.Received = size
 	c.Events.Add("file_done", pr.p)
 	return nil
 }
 
+// progressReader bọc file, đếm số byte đã đọc và phát file_progress tối đa mỗi progressEvery.
 type progressReader struct {
 	r      io.Reader
 	ev     *EventLog
@@ -101,12 +111,14 @@ func (pr *progressReader) Read(b []byte) (int, error) {
 	return n, err
 }
 
+// newID sinh id ngẫu nhiên cho file, để UI ghép các sự kiện tiến độ của cùng một file.
 func newID() string {
 	b := make([]byte, 8)
 	rand.Read(b)
 	return hex.EncodeToString(b)
 }
 
+// fileRecv là trạng thái nhận một file: đọc meta, rồi ghi đĩa và băm SHA-256 cùng lúc khi dữ liệu tới.
 type fileRecv struct {
 	hdr      protocol.FileHeaderParser
 	meta     protocol.FileMeta
@@ -119,6 +131,8 @@ type fileRecv struct {
 	failed   bool
 }
 
+// onFileData xử lý một đoạn của stream file: đọc meta ở đầu (có thể bị cắt giữa nhiều đoạn), tạo file
+// trong DownloadDir, ghi dữ liệu, tới FIN thì kiểm tra kích thước và SHA-256.
 func (c *Client) onFileData(r *fileRecv, d transport.Delivery) {
 	data := d.Data
 
@@ -158,6 +172,7 @@ func (c *Client) onFileData(r *fileRecv, d transport.Delivery) {
 	}
 }
 
+// open tạo file đích (tên an toàn, không ghi đè file có sẵn) và chuẩn bị MultiWriter(file, sha256).
 func (r *fileRecv) open(dir string, meta protocol.FileMeta) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -173,6 +188,7 @@ func (r *fileRecv) open(dir string, meta protocol.FileMeta) error {
 	return nil
 }
 
+// finishFile đóng file và so SHA-256: khớp thì báo file_done, lệch thì xóa file và báo file_error.
 func (c *Client) finishFile(r *fileRecv) {
 	r.f.Close()
 	r.f = nil
@@ -198,6 +214,7 @@ func (r *fileRecv) progress() FileProgress {
 	return FileProgress{ID: r.meta.ID, Dir: "in", From: r.meta.From, Name: r.meta.Name, Path: r.path, Received: r.received, Size: r.meta.Size}
 }
 
+// safeName bỏ mọi phần đường dẫn trong tên file người gửi đặt (chống "../../etc/passwd").
 func safeName(name string) string {
 	name = filepath.Base(filepath.Clean("/" + name))
 	if name == "/" || name == "." || name == ".." {
@@ -206,6 +223,7 @@ func safeName(name string) string {
 	return name
 }
 
+// createUnique tạo file mới với O_EXCL; trùng tên thì thử "a (1).txt", "a (2).txt"...
 func createUnique(dir, name string) (*os.File, string, error) {
 	ext := filepath.Ext(name)
 	stem := strings.TrimSuffix(name, ext)

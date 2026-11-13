@@ -103,6 +103,17 @@ func TestE2E(t *testing.T) {
 	}
 	t.Logf("5 MB, loss 10%% hai chiều: %v (%.1f MB/s)", elapsed, 5/elapsed.Seconds())
 
+	// Thanh tiến trình bên gửi: phải có file_progress chiều "out" với số byte tăng dần trước file_done.
+	var outProgress int
+	for _, e := range alice.Events.Since(0) {
+		if fp, ok := e.Data.(FileProgress); ok && e.Type == "file_progress" && fp.Dir == "out" && fp.Received > 0 && fp.Received < fp.Size {
+			outProgress++
+		}
+	}
+	if outProgress == 0 {
+		t.Fatal("bên gửi không có sự kiện file_progress nào: thanh tiến trình bên gửi không chạy")
+	}
+
 	// Step 7: bob rời đi → alice thấy danh sách còn 1 người.
 	// Gói CLOSE có thể bị mất (10% loss) → server phải chờ idle timeout 10s, nên cho tối đa 12s.
 	bob.Close()

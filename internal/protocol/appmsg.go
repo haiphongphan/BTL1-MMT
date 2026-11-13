@@ -55,7 +55,10 @@ type AppMsg struct {
 	To    string   `json:"to,omitempty"`
 	Text  string   `json:"text,omitempty"`
 	Users []string `json:"users,omitempty"`
-	TS    int64    `json:"ts"` // UnixMilli
+	// Addrs: kèm theo tin "users", địa chỉ "ip:port" UDP mà server đang dùng để nói chuyện với từng user
+	// (trước khi server nhận được gói UDP đầu tiên thì là IP lúc handshake TCP).
+	Addrs map[string]string `json:"addrs,omitempty"`
+	TS    int64             `json:"ts"` // UnixMilli
 	// Seq: số thứ tự tăng dần của người gửi trên 1 kết nối (1, 2, 3...), người nhận dùng SeqBuffer để giao
 	// đúng thứ tự. Server đánh lại Seq riêng cho từng người nhận. 0 = không cần thứ tự.
 	Seq uint64 `json:"seq,omitempty"`
