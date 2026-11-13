@@ -1,9 +1,10 @@
 \section{Sequence diagram}
 \label{sec:sequence}
 
-Ba sơ đồ dưới đây mô tả tầng ứng dụng: đăng nhập, một tin nhắn riêng, và một file. Diễn biến ở tầng transport
-khi một gói bị mất và được gửi lại đã có ở \cref{fig:seq-loss}; trong các sơ đồ này mỗi mũi tên STREAM ngầm
-hiểu là đã được tầng transport mã hóa, ACK và gửi lại nếu cần.
+Ba sơ đồ tuần tự dưới đây mô tả luồng trao đổi bản tin ở tầng ứng dụng cho ba tác vụ chính: đăng nhập, gửi tin
+nhắn riêng (DM) và truyền file. Cơ chế phát hiện mất gói và truyền lại ở tầng dưới sẽ được minh họa riêng tại
+\cref{fig:seq-loss}; trong các sơ đồ của chương này, mỗi mũi tên \texttt{STREAM} được hiểu là đã đi qua tầng
+transport (được chia frame, mã hóa AES-GCM, xác nhận ACK và tự động gửi lại nếu rớt gói).
 
 \subsection{Đăng nhập}
 \begin{figure}[H]
@@ -36,10 +37,12 @@ hiểu là đã được tầng transport mã hóa, ACK và gửi lại nếu c�
   \label{fig:seq-login}
 \end{figure}
 
-Hai điểm đáng chú ý. Thứ nhất, server không chờ gói UDP đầu tiên mới tạo kết nối transport: \fname{Mux.Accept}
-được gọi ngay khi đăng nhập xong, nên PING đầu của client tới là có người nhận ngay. Thứ hai, danh sách user
-trong \texttt{AUTH\_OK} chỉ là ảnh chụp lúc đó; danh sách chính thức luôn đi qua kênh UDP bằng tin
-\texttt{users}, được phát cho mọi người mỗi khi có ai vào hoặc ra.
+Ở quy trình đăng nhập (\cref{fig:seq-login}), có hai chi tiết thiết kế đáng lưu ý. Thứ nhất, server không đợi tới
+khi gói UDP đầu tiên bay tới mới khởi tạo đối tượng kết nối: hàm \fname{Mux.Accept} được gọi ngay trong bước xử lý
+\texttt{AUTH} trên TCP, nhờ vậy khi gói PING đầu tiên của client tới cổng 9001 là đã có sẵn \fname{Conn} đón
+nhận. Thứ hai, danh sách user đính kèm trong \texttt{AUTH\_OK} chỉ đóng vai trò khởi tạo nhanh cho client vừa
+đăng nhập; mọi thay đổi trạng thái online về sau đều được đồng bộ qua kênh UDP bằng bản tin \texttt{users} gửi
+tới toàn bộ thành viên trong phòng.
 
 \subsection{Một tin nhắn riêng}
 \begin{figure}[H]
@@ -73,9 +76,10 @@ trong \texttt{AUTH\_OK} chỉ là ảnh chụp lúc đó; danh sách chính th�
   \label{fig:seq-dm}
 \end{figure}
 
-Server không dội lại tin cho chính người gửi (tiết kiệm một lượt mạng), nên JavaScript tự hiển thị tin ngay khi
-\texttt{POST} thành công. Tin chat chung đi cùng đường nhưng được xếp vào \texttt{sendCh} của mọi session trừ
-người gửi.
+Khi gửi tin nhắn (\cref{fig:seq-dm}), để tiết kiệm băng thông, server không gửi trả lại bản tin đó về cho chính
+người gửi mà phía JavaScript trên trình duyệt sẽ tự hiển thị tin nhắn ngay khi nhận phản hồi \texttt{200 OK} từ
+request \texttt{POST /api/send}. Đối với tin nhắn chat chung (broadcast), luồng xử lý diễn ra hoàn toàn tương tự
+nhưng server sẽ đẩy bản tin vào hàng đợi \texttt{sendCh} của tất cả các session đang active (trừ người gửi).
 
 \subsection{Gửi file qua server}
 \begin{figure}[H]
@@ -111,8 +115,10 @@ người gửi.
   \label{fig:seq-file}
 \end{figure}
 
-Meta đi chung stream với dữ liệu (\cref{subsec:app}) nên server không cần ghép hai stream lại với nhau, và
-\fname{relayFile} chỉ là một vòng lặp đọc mảnh từ kênh rồi ghi vào stream tới người nhận. Nếu người nhận biến
-mất giữa chừng, stream tới họ đóng với lỗi, server ghi log và bỏ phần còn lại; người gửi vẫn hoàn tất gửi lên
-server và chỉ biết qua danh sách user. Gửi file ``cho mọi người'' (\texttt{to} rỗng) mở một stream tới từng
-người nhận và ghi cùng một mảnh vào tất cả.
+Với tính năng gửi file (\cref{fig:seq-file}), nhờ phần metadata nằm ngay ở đầu stream (\cref{subsec:app}), server
+không phải tốn công đồng bộ giữa hai stream khác nhau. Ngay khi tách xong metadata, server tạo một goroutine
+\fname{relayFile} chỉ làm nhiệm vụ đọc từng mảnh byte từ channel đệm (tối đa 256 mảnh) rồi ghi tiếp sang stream
+hướng về phía người nhận theo kiểu cuốn chiếu (pipeline). Nếu người nhận bị mất kết nối giữa chừng, stream gửi
+xuống người đó trả về lỗi, server ghi nhận log và bỏ qua các mảnh còn lại để không làm treo luồng đọc của người
+gửi. Trường hợp người dùng chọn gửi file cho cả phòng (trường \texttt{to} để trống), server sẽ mở đồng thời một
+stream tới từng client đang online và ghi quạt (fan-out) từng mảnh dữ liệu tới tất cả các stream đó.

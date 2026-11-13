@@ -11,21 +11,21 @@
   \textbf{Tham số} & \textbf{Giá trị} & \textbf{Ghi chú} \\
   \midrule
   \endhead
-  Kích thước gói & $\le$ 1200 byte & Tránh phân mảnh IP \\
-  Dữ liệu mỗi STREAM frame & $\le$ 1000 byte & Chừa chỗ ghép ACK \\
-  Đồng hồ mỗi kết nối & 10 ms khi có gói chờ ACK, 100 ms khi rảnh & Thử thách~\ref{tt:cpu} \\
-  Keep-alive & PING sau 2 s không gửi gì & \\
-  PING đầu sau khi kết nối & gửi lại sau 200, 400, 800 ms\dots{} (tối đa 2 s) & Thử thách~\ref{tt:ping-dau} \\
+  Kích thước gói UDP & $\le$ 1200 byte & Tránh phân mảnh ở tầng IP \cite{rfc9000} \\
+  Dữ liệu mỗi STREAM frame & $\le$ 1000 byte & Chừa chỗ ghép kèm frame ACK \\
+  Chu kỳ \texttt{ticker} mỗi kết nối & 10 ms khi có gói chờ ACK, 100 ms khi rảnh & Thử thách~\ref{tt:cpu} \\
+  Keep-alive & Gửi PING sau 2 s không có dữ liệu đi & \\
+  PING đầu sau khi mở kết nối & Gửi lại sau 200, 400, 800 ms\dots{} (tối đa 2 s) & Thử thách~\ref{tt:ping-dau} \\
   Idle timeout & 10 s & \\
-  Mất theo số đếm & bị 3 gói vượt mặt & RFC 9002 \\
-  Mất theo thời gian & $\frac98 \max(\mathit{SRTT}, R_\text{mới nhất})$, tối thiểu 1 ms & RFC 9002 \\
-  RTO & ban đầu 500 ms; sau đó $\mathit{SRTT} + \max(4\,\mathit{RTTVAR}, 1\,\text{ms}) + 10$ ms
-  & Công thức PTO của QUIC \\
-  RTO backoff & $\times 2$ mỗi lần hết giờ liên tiếp, tối đa 5 s & Về bình thường khi có ACK mới \\
-  ACK & ngay trong lần flush kế tiếp, tối đa 8 khoảng & Gói chỉ có ACK thì không ACK lại \\
-  Cửa sổ nhận & 1 MB & \\
-  Hàng đợi file (bulk) & 256 frame & Đầy thì \fname{Write} bị chặn \\
-  Congestion control & CUBIC (mặc định) hoặc cố định 64 KB (\texttt{-cc fixed}) & \\
-  CUBIC & $C = 0{,}4$, $\beta = 0{,}7$, cwnd ban đầu 10 gói, sàn 2 gói, trần 1 MB & RFC 9438 \\
+  Ngưỡng mất theo số gói & Có $\ge 3$ gói gửi sau đã được ACK trước & RFC 9002 (packet threshold) \cite{rfc9002} \\
+  Ngưỡng mất theo thời gian & $\frac98 \max(\mathit{SRTT}, R_\text{mới nhất})$, tối thiểu 1 ms & RFC 9002 (time threshold) \cite{rfc9002} \\
+  RTO & Khởi tạo 500 ms; sau đó $\mathit{SRTT} + \max(4\,\mathit{RTTVAR}, 1\,\text{ms}) + 10$ ms
+  & Công thức PTO của QUIC \cite{rfc9002} \\
+  RTO backoff & $\times 2$ sau mỗi lần hết giờ liên tiếp, trần 5 s & Reset về 1 khi nhận ACK mới \\
+  Phản hồi ACK & Gửi ngay ở lần flush kế tiếp, tối đa 8 khoảng SACK & Gói chỉ có ACK thì không ACK lại \\
+  Cửa sổ nhận (flow control) & 1 MB & \\
+  Hàng đợi gửi file (\texttt{bulkQ}) & 256 frame & Đầy thì chặn lệnh \fname{Write} \\
+  Điều khiển tắc nghẽn & CUBIC (mặc định) hoặc cố định 64 KB (\texttt{-cc fixed}) & \\
+  Tham số CUBIC & $C = 0{,}4$, $\beta = 0{,}7$, cwnd đầu 10 gói, sàn 2 gói, trần 1 MB & RFC 9438 \cite{rfc9438} \\
   \bottomrule
 \end{longtable}

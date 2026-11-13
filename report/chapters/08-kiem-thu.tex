@@ -1,26 +1,30 @@
 \section{Kiểm thử}
 \label{sec:kiem-thu}
 
-Chương này trình bày cách nhóm kiểm thử hệ thống: bộ giả lập mạng dùng để tạo ra các điều kiện mạng xấu, các
-test đơn vị và tích hợp, các phép đo hiệu năng của tầng transport, và cuối cùng là các kịch bản chạy thử toàn hệ
-thống.
+Để kiểm tra độ ổn định của giao thức tự thiết kế trước khi ghép vào ứng dụng hoàn chỉnh, nhóm kết hợp cả kiểm
+thử tự động (unit test, integration test trên mạng giả lập) lẫn chạy kịch bản thực tế trên các file thực thi của
+server và client.
 
-\paragraph{Môi trường.} Các phép đo của tầng transport được chạy trên WSL2 (Linux 6.18, 18 CPU), Go 1.27.3, qua
-loopback, vào ngày 12/11/2026. Các lệnh nhóm dùng để kiểm tra:
+\paragraph{Môi trường đo đạc.} Các phép đo hiệu năng của tầng transport được thực hiện trên môi trường WSL2
+(Linux 6.18, 18 vCPU), Go 1.27.3, chạy qua giao diện loopback vào ngày 12/11/2026. Các lệnh kiểm tra tự động
+của dự án gồm:
 \begin{center}
   \small
   \begin{tabularx}{\linewidth}{lY}
-    \texttt{go vet ./...} & sạch \\
-    \texttt{go test -race ./...} & sạch (protocol, transport, server, client) \\
-    \texttt{BTL\_LONG=1 go test -run Long -v ./internal/transport/} & các phép đo ở \cref{tab:do-transport}
+    \texttt{go vet ./...} & Không báo cảnh báo lỗi cú pháp/ngữ nghĩa \\
+    \texttt{go test -race ./...} & Pass toàn bộ test (\fname{protocol}, \fname{transport}, \fname{server},
+    \fname{client}), không phát hiện data race \\
+    \texttt{BTL\_LONG=1 go test -run Long -v ./internal/transport/} & Chạy bộ test đo hiệu năng dài hạn ở
+    \cref{tab:do-transport}
   \end{tabularx}
 \end{center}
 
 \subsection{Giả lập mạng}
 \label{subsec:gia-lap}
-Khi chạy trên loopback, gói không bao giờ bị mất và RTT chỉ dưới 1 ms, nên không thể kiểm tra được cơ chế
-truyền tin cậy hay điều khiển tắc nghẽn. Vì vậy nhóm viết \fname{LossyConn}, một lớp bọc bên ngoài socket UDP
-thật, có nhiệm vụ cố ý làm xấu chiều gửi theo các tham số trong \cref{tab:lossy}.
+Nếu chỉ test trực tiếp trên giao diện loopback (\texttt{127.0.0.1}), gói UDP gần như không bao giờ bị rớt và RTT
+chỉ dưới 1 ms, nên các nhánh code truyền lại gói mất hay điều khiển tắc nghẽn CUBIC sẽ không có cơ hội chạy thật.
+Vì vậy, nhóm viết lớp bọc \fname{LossyConn} nằm ngay trên socket UDP để chủ động tạo ra các điều kiện mạng kém
+ở chiều gửi theo các tham số trong \cref{tab:lossy}.
 
 \begin{table}[H]
   \centering
@@ -30,21 +34,24 @@ thật, có nhiệm vụ cố ý làm xấu chiều gửi theo các tham số tr
     \toprule
     \textbf{Tham số} & \textbf{Ý nghĩa} \\
     \midrule
-    \texttt{Loss} & Bỏ gói ngẫu nhiên với xác suất cho trước: mất gói \emph{không} do nghẽn (sóng yếu) \\
-    \texttt{Delay}, \texttt{Jitter} & Trễ đường truyền, dao động ngẫu nhiên nhưng giữ FIFO như hàng đợi router:
-    gói sau không bao giờ tới trước gói trước \\
-    \texttt{Reorder} & Cố ý cho mỗi gói trễ độc lập, tức đảo thứ tự hàng loạt \\
-    \texttt{Rate}, \texttt{QueueBytes} & Nút cổ chai băng thông với bộ đệm; đầy thì bỏ gói ở đuôi: mất gói
-    \emph{do nghẽn}, đúng loại tín hiệu mà CUBIC được thiết kế để phản ứng \\
+    \texttt{Loss} & Bỏ gói ngẫu nhiên theo xác suất cấu hình: mô phỏng mất gói \emph{không} do nghẽn (ví dụ sóng
+    Wi-Fi yếu) \\
+    \texttt{Delay}, \texttt{Jitter} & Tạo độ trễ đường truyền kèm dao động ngẫu nhiên nhưng vẫn bảo toàn thứ tự
+    FIFO giống hàng đợi của router thật \\
+    \texttt{Reorder} & Cố ý hẹn giờ trễ độc lập cho từng gói để gây hiện tượng đảo thứ tự gói hàng loạt \\
+    \texttt{Rate}, \texttt{QueueBytes} & Giới hạn băng thông tối đa kèm bộ đệm hàng đợi; khi bộ đệm đầy thì bỏ
+    gói ở đuôi (drop-tail), tạo ra mất gói \emph{do tắc nghẽn} để kiểm tra CUBIC \\
     \bottomrule
   \end{tabularx}
 \end{table}
 
-Chương trình client và server cũng nhận cờ \texttt{-loss} để có thể demo việc mất gói khi chạy trên máy thật.
+Ngoài việc dùng trong các file test, cả hai chương trình \fname{server} và \fname{client} đều hỗ trợ cờ dòng lệnh
+\texttt{-loss} (bọc \fname{LossyConn} quanh socket thật) để tiện demo trực tiếp khả năng chịu lỗi khi vấn đáp.
 
 \subsection{Test đơn vị và tích hợp của tầng giao thức và transport}
-Tầng giao thức và transport có tổng cộng 65 test, gồm 20 test trong \fname{internal/protocol} và 45 test trong
-\fname{internal/transport}, chạy hết trong khoảng 15 giây. \Cref{tab:unit-test} tóm tắt nội dung các nhóm test.
+Hai package \fname{internal/protocol} (20 test) và \fname{internal/transport} (45 test) có tổng cộng 65 test tự
+động, thời gian chạy toàn bộ khoảng 15 giây. Các nhóm kịch bản kiểm tra chính được tổng hợp trong
+\cref{tab:unit-test}.
 
 \begin{longtable}{L{0.24\linewidth} L{0.7\linewidth}}
   \caption{Các nhóm test của tầng giao thức và transport}\label{tab:unit-test} \\
@@ -56,35 +63,38 @@ Tầng giao thức và transport có tổng cộng 65 test, gồm 20 test trong 
   \textbf{Nhóm} & \textbf{Nội dung kiểm tra} \\
   \midrule
   \endhead
-  Định dạng gói, frame & Ghi rồi đọc lại mọi loại frame và header ra đúng giá trị; nhiều frame trong một gói;
-  dữ liệu cụt hoặc type lạ trả lỗi, không panic; CLOSE reason bị cắt đúng ranh giới ký tự UTF-8 \\
-  Handshake, meta file & Khung \texttt{[len][JSON]} liên tiếp; từ chối độ dài quá lớn; meta file đọc được khi
-  dữ liệu tới từng byte một \\
-  \fname{SeqBuffer} & Sắp lại tin đến sai thứ tự (cả hoán vị ngẫu nhiên); bỏ tin trùng; bỏ qua chỗ trống vĩnh
-  viễn để không treo \\
-  ACK & Khoảng SACK đúng với các lỗ hổng; gói trùng; tối đa 8 khoảng; giới hạn lịch sử \\
-  RTT, RTO & Mẫu đầu, công thức cập nhật, RTO không tiến về RTT khi đường truyền đều, ngưỡng mất theo thời gian \\
-  Ghép stream & Đúng thứ tự, đảo thứ tự, trùng, chồng lấn, FIN tới trước dữ liệu; cắt frame $\le$ 1000 byte;
-  ghi vào stream đã đóng trả lỗi \\
-  Mã hóa & Hai bên ra cùng khóa; sửa bất kỳ byte nào thì giải mã thất bại; nonce không trùng giữa hai chiều;
-  không thấy plaintext trên dây (\cref{sec:bao-mat}) \\
-  CUBIC & Slow start gấp đôi mỗi RTT; giảm còn 70\% khi mất; hình dạng đường bậc 3 quanh $W_\text{max}$; vùng
-  Reno-friendly; sàn và trần \\
-  Truyền qua UDP thật & 5 MB qua loss 20\% mỗi chiều: đúng từng byte; 1 MB qua loss 10\% với CUBIC; chiều server
-  $\to$ client \\
-  Vòng đời kết nối & \texttt{Close} báo đầu kia ngay; đóng \fname{Mux} đóng mọi kết nối; bên kia chết thì phát
-  hiện sau $\approx$ 10 s \\
-  Phát hiện mất, gửi lại & RTO backoff nhân đôi khi mạng chết; mất theo số đếm không tăng backoff; gửi lại theo
-  đúng thứ tự gửi; ACK cũ không ghi đè cửa sổ mới \\
-  Bộ giả lập & Jitter giữ FIFO; nút cổ chai bỏ gói khi bộ đệm đầy \\
+  Định dạng gói, frame & Encode rồi decode lại mọi loại frame và header ra đúng giá trị; đóng gói nhiều frame
+  trong cùng một gói; dữ liệu bị cắt cụt hoặc mã \texttt{type} lạ đều trả về lỗi chứ không panic; chuỗi
+  \texttt{reason} của frame CLOSE được cắt đúng ranh giới ký tự UTF-8 \\
+  Handshake, meta file & Đọc/ghi liên tiếp các khung \texttt{[len][JSON]}; từ chối khung khai báo độ dài vượt
+  ngưỡng; \fname{FileHeaderParser} tách đúng metadata ngay cả khi dữ liệu được mớm vào từng byte một \\
+  \fname{SeqBuffer} & Sắp xếp lại bản tin đến sai thứ tự (kể cả hoán vị ngẫu nhiên); lọc bỏ bản tin trùng số
+  \texttt{Seq}; tự nhảy qua khoảng trống khi vượt ngưỡng \texttt{MaxSeqPending} để tránh treo \\
+  ACK & Sinh đúng các khoảng SACK khi có gói bị khuyết hoặc gói trùng; giới hạn tối đa 8 khoảng SACK và giới hạn
+  bộ nhớ lưu lịch sử gói nhận \\
+  RTT, RTO & Khởi tạo mẫu RTT đầu tiên, công thức cập nhật SRTT/RTTVAR, đảm bảo RTO không co sát về RTT khi độ trễ
+  đều, kiểm tra ngưỡng phát hiện mất gói theo thời gian \\
+  Ghép stream & Giao dữ liệu đúng thứ tự khi gói đến xuôi, ngược, trùng lặp, chồng lấn một phần, hoặc khi cờ FIN
+  tới trước dữ liệu; tự động cắt frame $\le$ 1000 byte; trả lỗi khi ghi vào stream đã đóng \\
+  Mã hóa & Hai đầu ECDH tính ra cùng khóa; sửa bất kỳ byte nào trên gói đều làm giải mã thất bại; nonce phân biệt
+  giữa hai chiều truyền; không lộ plaintext trên đường truyền (\cref{sec:bao-mat}) \\
+  CUBIC & Pha slow start tăng gấp đôi mỗi RTT; giảm còn 70\% khi mất gói; quỹ đạo hàm bậc ba quanh $W_\text{max}$;
+  nhánh Reno-friendly; chặn sàn và trần \texttt{cwnd} \\
+  Truyền qua UDP thật & Truyền 5 MB qua đường truyền loss 20\% mỗi chiều khớp từng byte; truyền 1 MB qua loss
+  10\% với CUBIC; kiểm tra truyền dữ liệu chiều từ server $\to$ client \\
+  Vòng đời kết nối & Gọi \texttt{Close} báo ngay cho đầu bên kia; đóng \fname{Mux} giải phóng toàn bộ kết nối
+  con; tự phát hiện khi đầu bên kia ngừng phản hồi sau $\approx$ 10 s \\
+  Phát hiện mất, gửi lại & RTO exponential backoff nhân đôi khi đứt mạng; mất gói phát hiện theo số đếm không làm
+  tăng backoff; truyền lại giữ đúng thứ tự ban đầu; gói ACK cũ đến trễ không ghi đè \texttt{window} mới \\
+  Bộ giả lập & Chế độ jitter vẫn bảo toàn thứ tự FIFO; đường truyền bottleneck bỏ gói khi tràn hàng đợi \\
   \bottomrule
 \end{longtable}
 
 \subsection{Phép đo tầng transport}
 \label{subsec:do-transport}
-Ngoài các test kiểm tra đúng sai, nhóm còn đo tốc độ truyền một stream dài qua mạng giả lập với nhiều điều kiện
-khác nhau, kết quả ở \cref{tab:do-transport}. Cột ``CC'' cho biết thuật toán điều khiển tắc nghẽn được dùng:
-CUBIC hoặc cửa sổ cố định.
+Bên cạnh các test kiểm tra tính đúng đắn, nhóm thực hiện đo thông lượng truyền một stream lớn qua bộ giả lập mạng
+ở nhiều tổ hợp tham số khác nhau (\cref{tab:do-transport}). Cột ``CC'' cho biết chế độ điều khiển tắc nghẽn được
+sử dụng (thuật toán CUBIC hoặc cửa sổ cố định \texttt{fixed}).
 
 \begin{table}[H]
   \centering
@@ -106,25 +116,37 @@ CUBIC hoặc cửa sổ cố định.
   \end{tabularx}
 \end{table}
 
-Cột ``Gói mất'' là tỉ lệ số gói mà bên gửi coi là đã mất và phải gửi lại, so với tổng số gói đã gửi. Con số này
-lớn hơn tỉ lệ loss đặt cho chiều dữ liệu, vì ACK ở chiều ngược lại cũng bị mất. Đáng chú ý là với 20 MB qua
-jitter 20 ms và không đặt mất gói, chỉ có 0,2\% gói bị coi là mất oan; trước khi nhóm sửa bộ giả lập, con số này
-là 89\% (thử thách~\ref{tt:jitter}). Kết quả đo độ trễ tin chat trong lúc truyền file đã được trình bày ở
+Trong bảng trên, cột ``Gói mất'' là tỉ lệ gói tin mà phía gửi xác định là đã mất và phải truyền lại so với tổng
+số gói phát ra. Tỉ lệ này thường cao hơn con số \texttt{loss} cấu hình cho chiều đi vì bản thân các gói ACK ở
+chiều về cũng bị rớt theo cùng xác suất, khiến một số gói dữ liệu hết RTO và được gửi lại. Một kết quả đáng chú ý
+là ở kịch bản truyền 20 MB có jitter 20 ms nhưng không bật rớt gói (\texttt{loss 0\%}), tỉ lệ báo mất gói nhầm chỉ
+còn 0,2\% (trước khi nhóm sửa lại hàng đợi FIFO cho bộ giả lập jitter thì con số này lên tới 89\%, xem thử
+thách~\ref{tt:jitter}). Kết quả đo độ trễ tin nhắn chat khi truyền song song với file lớn đã được trình bày ở
 \cref{tab:hol}.
 
 \subsection{Test tích hợp và hệ thống của tầng ứng dụng}
 \label{subsec:test-he-thong}
-Phía server có 7 test tích hợp (\fname{internal/server/router\_test.go}) chạy server thật với transport giả
-(\fname{transport.FakePair}): broadcast 20 tin đúng thứ tự và \texttt{From} bị ghi đè; DM tới user offline trả
-\texttt{error}; file 300 KB đi qua server với header bị cắt làm hai mảnh; file tới user offline; client chết thì
-danh sách user được phát lại và registry sạch; đăng nhập trùng bị từ chối; tin tới với \texttt{Seq} 2, 3, 1 được
-giao 1, 2, 3 và server đánh lại \texttt{Seq} liên tiếp cho người nhận. Test hệ thống
-\fname{internal/client/e2e\_test.go} chạy server thật và hai client thật qua UDP localhost với loss 10\% mỗi
-chiều: chat tới đúng người, file 5 MB đúng SHA-256, DM gửi giữa lúc truyền file vẫn tới ngay, client đóng thì
-người kia thấy danh sách cập nhật. Tất cả chạy trong \texttt{go test -race ./...}.
+Ở tầng ứng dụng, phía server có bộ 7 test tích hợp trong \fname{internal/server/router\_test.go} ghép trực tiếp
+logic định tuyến của server thật với kết nối trong bộ nhớ (\fname{transport.FakePair}), bao gồm:
+\begin{itemize}
+  \item Broadcast 20 tin nhắn liên tiếp giữ đúng thứ tự và kiểm tra server tự động ghi đè trường \texttt{From}.
+  \item Gửi DM hoặc gửi file tới một người dùng đang offline thì người gửi nhận lại bản tin \texttt{error}.
+  \item Chuyển tiếp thành công một file 300 KB qua server ngay cả khi phần header metadata bị cắt đôi giữa hai
+        mảnh \fname{Delivery}.
+  \item Khi một client ngắt kết nối, \fname{Registry} tự xóa phiên và phát lại danh sách user mới cho những người
+        còn lại; chặn trường hợp hai client đăng nhập trùng tên.
+  \item Các bản tin từ client gửi lên bị đảo thứ tự (\texttt{Seq} 2, 3 rồi mới tới 1) được \fname{SeqBuffer} của
+        server sắp lại thành 1, 2, 3 và đánh lại dãy \texttt{Seq} liên tiếp trước khi phát xuống người nhận.
+\end{itemize}
+Ngoài ra, bộ test end-to-end trong \fname{internal/client/e2e\_test.go} khởi chạy cả server thật lẫn hai client
+thật giao tiếp qua socket UDP localhost với mức rớt gói 10\% ở mỗi chiều để kiểm tra toàn diện: chat đúng đích,
+truyền file 5 MB khớp mã băm SHA-256, tin nhắn DM gửi xen giữa lúc đang tải file vẫn tới ngay lập tức, và danh
+sách online tự cập nhật khi một bên đóng kết nối. Toàn bộ các test này đều được chạy kèm cờ \texttt{-race}.
 
-Bảng dưới là các kịch bản chạy bằng binary thật (server, client với Web UI, gọi qua \texttt{/api}) trên macOS
-(Apple Silicon), Go 1.27, loopback, mỗi bên \texttt{-loss 0.1} trừ khi ghi khác; đo ngày 13/11/2026.
+Cuối cùng, nhóm biên dịch ra hai file thực thi \fname{server} và \fname{client} (có bật đầy đủ Web UI và gọi qua
+các endpoint \texttt{/api}) để chạy kiểm thử hệ thống trên máy macOS (Apple Silicon, Go 1.27, chạy qua loopback
+với cấu hình mặc định \texttt{-loss 0.1} cho cả hai đầu trừ khi ghi chú khác, đo ngày 13/11/2026). Kết quả của 10
+kịch bản được tổng hợp trong \cref{tab:he-thong}.
 
 \begin{longtable}{c L{0.27\linewidth} L{0.6\linewidth}}
   \caption{Test hệ thống với server và client thật}\label{tab:he-thong} \\
@@ -136,32 +158,40 @@ Bảng dưới là các kịch bản chạy bằng binary thật (server, client
   \textbf{\#} & \textbf{Kịch bản} & \textbf{Kết quả} \\
   \midrule
   \endhead
-  1 & 3 client: chat chung, DM, DM tới user offline & 20 tin liên tiếp tới cả hai người kia đúng thứ tự; người
-  gửi không nhận lại tin mình; DM chỉ người nhận thấy, \texttt{From} do server đặt; DM tới user không online
-  nhận \texttt{error} ``User 'zed' hiện không online'' \\
-  2 & Loss 20\% mỗi chiều + jitter 30 ms, 50 chat liên tiếp & Nhận đủ 50/50, đúng thứ tự, không trùng, trong
-  1,0 s; transport báo 18,7\% gói phải gửi lại \\
-  3 & File 1 KB / 10 MB / 200 MB, loss 10\% & SHA-256 khớp cả ba; 1 KB: 0,06 s; 10 MB: 7,4 s (1,4 MB/s);
-  200 MB: 121 s (1,65 MB/s); bộ nhớ server không tăng theo kích thước file \\
-  4 & DM gửi trong lúc file 200 MB đang truyền & DM tới người nhận sau \textbf{57 ms}, không chờ file
-  (\cref{sec:hol}) \\
-  5 & Ctrl+C một client; \texttt{kill -9} một client khác & Ctrl+C: client gửi \texttt{CLOSE}, người còn lại thấy
-  danh sách cập nhật sau \textbf{0,05 s}; \texttt{kill -9}: không có \texttt{CLOSE}, phát hiện bằng idle timeout
-  sau 9,97 s; cả hai đăng nhập lại được ngay \\
-  6 & Ctrl+C server rồi bật lại & Server gửi \texttt{CLOSE} cho mọi client, client sang \textsc{Reconnecting} sau
-  0,05 s; server bật lại thì client \textsc{Connected} sau 1,0 s (lần thử đầu của backoff) \\
-  7 & Sai mật khẩu / user lạ / đăng nhập trùng & \texttt{AUTH\_FAIL} cả ba: hai trường hợp đầu cùng lý do ``tài
-  khoản hoặc mật khẩu không chính xác'', trùng thì ``tài khoản đang online ở máy khác'' \\
-  8 & Gói rác: 200 gói UDP ngẫu nhiên 1--1400 byte vào 9001; TCP gửi độ dài sai và JSON hỏng vào 9000 & Server
-  không crash, không log lỗi; client đang nối vẫn \texttt{connected}; handshake treo bị cắt sau 10 s \\
-  9 & 20 client bot, loss 10\%, 60 s & \textbf{86 goroutine} (4 cho mỗi client + nền) không đổi suốt thời gian
-  chạy, heap 1,1--2,8 MB (GC dao động); mỗi client nhận $\approx$ 550 tin/phút, 0 lỗi, hàng đợi gửi không bao
-  giờ đầy; tắt 20 client thì server xóa đủ session \\
-  10 & Wireshark trên 9000/TCP và 9001/UDP & Chỉ thấy base64 của \texttt{sealed} trong \texttt{AUTH}; payload
-  UDP không đọc được (\cref{sec:bao-mat}) \\
+  1 & 3 client: chat chung, nhắn DM, nhắn DM tới user offline & Cả 20 tin chat liên tiếp đều tới đủ hai người nhận
+  theo đúng thứ tự (người gửi không bị nhận lặp lại tin của mình); tin DM chỉ hiển thị ở đúng người nhận với
+  trường \texttt{From} chuẩn của server; nhắn DM cho tài khoản không online nhận về thông báo \texttt{error}
+  \emph{``User 'zed' hiện không online''} \\
+  2 & Bật loss 20\% mỗi chiều + jitter 30 ms, bắn 50 tin chat liên tiếp & Phía nhận nhận đủ 50/50 tin, đúng thứ tự,
+  không trùng lặp trong 1,0 s; thống kê tầng transport ghi nhận 18,7\% số gói phải truyền lại \\
+  3 & Truyền file kích thước 1 KB / 10 MB / 200 MB với loss 10\% & Mã băm SHA-256 ở đầu nhận khớp cả ba file;
+  file 1 KB mất 0,06 s; file 10 MB mất 7,4 s (1,4 MB/s); file 200 MB mất 121 s (1,65 MB/s); dung lượng RAM của
+  tiến trình server giữ ổn định, không phình theo kích thước file \\
+  4 & Gửi DM xen kẽ trong lúc đang truyền file 200 MB & Tin nhắn DM hiển thị ở phía người nhận chỉ sau
+  \textbf{57 ms}, không bị kẹt chờ file tải xong (\cref{sec:hol}) \\
+  5 & Bấm Ctrl+C tắt một client; dùng \texttt{kill -9} tắt cưỡng bức một client khác & Với Ctrl+C: client kịp gửi
+  gói \texttt{CLOSE} nên các client còn lại thấy danh sách online cập nhật chỉ sau \textbf{0,05 s}; với
+  \texttt{kill -9}: không có gói \texttt{CLOSE}, server phát hiện qua idle timeout sau 9,97 s; cả hai tài khoản
+  đều đăng nhập lại được bình thường \\
+  6 & Tắt server bằng Ctrl+C rồi khởi động lại & Khi tắt, server phát \texttt{CLOSE} cho toàn bộ client đang nối
+  nên các client chuyển sang \textsc{Reconnecting} sau 0,05 s; ngay khi bật lại server, các client tự kết nối lại
+  thành công (\textsc{Connected}) sau 1,0 s ở chu kỳ backoff đầu tiên \\
+  7 & Đăng nhập sai mật khẩu / tài khoản lạ / đăng nhập trùng tên & Cả ba đều nhận \texttt{AUTH\_FAIL}: hai trường
+  hợp đầu trả về cùng thông báo \emph{``tài khoản hoặc mật khẩu không chính xác''}, trường hợp thứ ba báo
+  \emph{``tài khoản đang online ở máy khác''} \\
+  8 & Bắn 200 gói UDP ngẫu nhiên (1--1400 byte) vào cổng 9001; gửi khung TCP khai báo sai độ dài và JSON lỗi vào
+  cổng 9000 & Server bỏ qua toàn bộ gói rác, không bị crash, các client đang online vẫn giữ trạng thái
+  \texttt{connected} bình thường; kết nối TCP treo giữa chừng tự động bị đóng sau deadline 10 s \\
+  9 & Chạy tải 20 client bot đồng thời với loss 10\% trong 60 s & Server duy trì ổn định \textbf{86 goroutine}
+  (4 goroutine cho mỗi client cộng các luồng nền) suốt thời gian chạy, bộ nhớ heap dao động trong khoảng
+  1,1--2,8 MB theo chu kỳ dọn rác (GC); mỗi client nhận trung bình $\approx$ 550 tin/phút, không phát sinh lỗi và
+  hàng đợi \texttt{sendCh} không bị tràn; khi tắt cả 20 client thì server thu hồi sạch cả 20 session \\
+  10 & Bắt gói bằng Wireshark trên cổng 9000/TCP và 9001/UDP & Chỉ thấy chuỗi base64 của trường \texttt{sealed}
+  trong bản tin \texttt{AUTH}; toàn bộ phần payload của gói UDP đều ở dạng bản mã không đọc được
+  (\cref{sec:bao-mat}) \\
   \bottomrule
 \end{longtable}
 
-Kịch bản 1--8 được tự động hóa bằng một script gọi \texttt{/api/send}, \texttt{/api/upload},
-\texttt{/api/events} của Web UI, nên lặp lại được sau mỗi lần sửa code; kịch bản 9 dùng
-\fname{scripts/run\_clients.sh}.
+Các kịch bản từ 1 đến 8 được nhóm viết thành script tự động gọi qua các HTTP endpoint \texttt{/api/send},
+\texttt{/api/upload} và \texttt{/api/events} của Web UI để có thể chạy kiểm tra lại nhanh mỗi khi sửa code; riêng
+kịch bản tải 20 client ở mục 9 được chạy bằng script \fname{scripts/run\_clients.sh}.

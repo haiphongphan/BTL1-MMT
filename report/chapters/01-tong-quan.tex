@@ -1,49 +1,36 @@
 \section{Tổng quan}
 \label{sec:tong-quan}
 
-Chương này giới thiệu bài toán mà đề yêu cầu, các công nghệ nhóm chọn để hiện thực, cách nhóm chia hệ thống
-thành các tầng, và cuối cùng là bảng đối chiếu từng bước của đề với phần thiết kế tương ứng trong báo cáo.
-
 \subsection{Bài toán}
-Đề bài yêu cầu xây dựng một ứng dụng cộng tác theo mô hình client--server chạy trong mạng nội bộ. Người dùng có
-thể đăng nhập, xem danh sách những người đang online, chat chung với mọi người (broadcast), nhắn riêng cho một
-người (unicast) và gửi file cho nhau.
+Đề bài yêu cầu xây dựng một ứng dụng cộng tác theo mô hình client--server hoạt động trong mạng nội bộ (LAN).
+Người dùng có thể đăng nhập, xem danh sách những người đang online, chat chung với cả phòng (broadcast), nhắn
+tin riêng cho từng người (unicast) và gửi file cho nhau.
 
-Điểm khó nhất của đề là toàn bộ dữ liệu phải đi qua \textbf{một giao thức tầng ứng dụng do nhóm tự thiết kế trên
-UDP}. UDP chỉ gửi từng gói rời rạc, không đảm bảo gói tới nơi và cũng không đảm bảo thứ tự, nên nhóm phải tự bổ
-sung những tính chất mà UDP không có:
+Yêu cầu trọng tâm và cũng là phần thử thách nhất của đề là toàn bộ dữ liệu phải truyền qua \textbf{một giao thức
+tầng ứng dụng do nhóm tự thiết kế trên nền UDP}. Vì UDP vốn chỉ gửi từng gói tin (datagram) rời rạc, không đảm
+bảo gói tới đích và cũng không giữ thứ tự, nhóm cần tự xây dựng thêm các cơ chế ở tầng trên để đáp ứng:
 \begin{itemize}
-  \item truyền tin cậy và đúng thứ tự;
-  \item điều khiển luồng (không gửi nhanh hơn khả năng nhận của bên kia) và điều khiển tắc nghẽn (không gửi
-        nhanh hơn khả năng của mạng), dùng CUBIC hoặc BBR;
-  \item mã hóa dữ liệu;
-  \item không bị \emph{Head-of-Line blocking} (HoL), tức là một file lớn đang gửi không được làm tin nhắn chat
-        bị kẹt lại phía sau.
+  \item Truyền dữ liệu tin cậy và đúng thứ tự;
+  \item Flow control -- tránh gửi nhanh hơn khả năng xử lý của bên nhận và Congestion control -- điều chỉnh tốc độ gửi theo tình trạng đường truyền, cài đặt thuật toán CUBIC \cite{rfc9438} hoặc BBR \cite{bbr};
+  \item Mã hóa và xác thực dữ liệu trên đường truyền;
+  \item Loại bỏ \emph{Head-of-Line blocking} (HoL), tức là khi đang truyền một file lớn thì các tin nhắn chat gửi xen kẽ không bị kẹt lại chờ file truyền xong.
 \end{itemize}
-Đề bài gợi ý tham khảo QUIC \cite{rfc9000} và Valve GameNetworkingSockets \cite{valve-gns}, là hai giao thức
-transport hướng message được xây dựng trên UDP.
-
-Ngoài ra đề có một số ràng buộc kỹ thuật: chỉ được dùng socket thô (không dùng framework HTTP hay WebSocket),
-giao diện là trang web viết bằng JavaScript thuần, và server phải chịu được 10--20 client kết nối đồng thời.
 
 \subsection{Lựa chọn công nghệ}
-Nhóm chọn viết toàn bộ hệ thống bằng \textbf{Go} và \textbf{chỉ dùng thư viện chuẩn} của Go, không dùng thư viện
-ngoài. Các package chính nhóm sử dụng gồm:
+Nhóm hiện thực toàn bộ hệ thống bằng ngôn ngữ \textbf{Go} và \textbf{chỉ sử dụng thư viện chuẩn} (standard
+library). Các package chính được dùng gồm:
 \begin{itemize}
-  \item \fname{net}: mở socket TCP/UDP thô (\fname{net.ListenUDP}, \fname{WriteToUDP}, \fname{ReadFromUDP}).
-  \item \fname{crypto/ecdh}, \fname{crypto/aes}, \fname{crypto/cipher}, \fname{crypto/sha256}: trao đổi
-        khóa X25519 và mã hóa AES-256-GCM.
-  \item \fname{encoding/binary}, \fname{encoding/json}: đóng gói header và frame dạng nhị phân, và mã hóa nội
-        dung tầng ứng dụng dạng JSON.
+  \item \fname{net}: mở và đọc/ghi trực tiếp trên socket TCP, UDP thô (\fname{net.ListenUDP},
+        \fname{WriteToUDP}, \fname{ReadFromUDP}).
+  \item \fname{crypto/ecdh}, \fname{crypto/aes}, \fname{crypto/cipher}, \fname{crypto/sha256}: thực hiện trao đổi
+        khóa X25519 \cite{rfc7748} và mã hóa đối xứng AES-256-GCM \cite{gcm}.
+  \item \fname{encoding/binary}, \fname{encoding/json}: đóng gói header/frame nhị phân và serialize các bản tin
+        tầng ứng dụng dưới dạng JSON.
 \end{itemize}
-Lý do nhóm chọn Go là goroutine (luồng nhẹ của Go) rất rẻ, mỗi goroutine chỉ tốn vài KB stack. Nhờ vậy mỗi
-kết nối có thể có goroutine riêng, và server phục vụ 20 client cũng chỉ cần vài chục goroutine. Bên cạnh đó, câu
-lệnh \fname{select} trên channel cho phép nhóm viết vòng lặp xử lý sự kiện của mỗi kết nối mà không cần dùng khóa
-(mutex).
+Lý do chính nhóm chọn Go là vì cơ chế goroutine rất nhẹ (mỗi goroutine lúc khởi tạo chỉ tốn vài KB stack). Nhờ đó nhóm có thể tách riêng các luồng đọc, ghi và quản lý trạng thái cho từng kết nối; ngay cả khi server chạy đồng thời 20 client thì tổng số goroutine cũng chỉ khoảng vài chục. Ngoài ra, cấu trúc \fname{select} kết hợp với channel của Go rất hợp để viết event loop cho giao thức mạng mà hạn chế phải dùng quá nhiều khóa \texttt{Mutex}, giảm hẳn nguy cơ deadlock hay race condition.
 
 \subsection{Phân tầng}
-Đề yêu cầu tách riêng logic mạng, xử lý dữ liệu và giao diện. Để đáp ứng yêu cầu này, nhóm chia hệ thống thành
-bốn tầng như trong \cref{tab:tang}.
+Để đáp ứng yêu cầu tách bạch giữa xử lý mạng, logic nghiệp vụ và giao diện, nhóm chia mã nguồn thành bốn tầng như ở \cref{tab:tang}.
 
 \begin{table}[H]
   \centering
@@ -53,21 +40,22 @@ bốn tầng như trong \cref{tab:tang}.
     \toprule
     \textbf{Tầng} & \textbf{Package} & \textbf{Nhiệm vụ} \\
     \midrule
-    Giao diện & \fname{internal/webui} & HTTP/1.1 tự viết trên socket TCP, trang HTML + JS thuần \\
-    Ứng dụng & \fname{internal/server}, \fname{internal/client} & Đăng nhập, danh sách user, định tuyến
-    chat/DM, chuyển tiếp file \\
-    Định dạng & \fname{internal/protocol} & Header gói, frame, nội dung stream (\fname{AppMsg},
-    \fname{FileMeta}), \fname{SeqBuffer} \\
-    Transport & \fname{internal/transport} & Biến UDP thành kênh tin cậy, mã hóa, nhiều stream độc lập,
-    tự điều tốc \\
+    Giao diện & \fname{internal/webui} & HTTP/1.1 cài đặt trên socket TCP, phục vụ trang HTML + JS thuần \\
+    Ứng dụng & \fname{internal/server}, \fname{internal/client} & Xác thực đăng nhập, quản lý phiên online, định
+    tuyến chat/DM, chuyển tiếp file \\
+    Định dạng & \fname{internal/protocol} & Định nghĩa header gói, các loại frame, bản tin ứng dụng (\fname{AppMsg},
+    \fname{FileMeta}) và bộ đệm sắp thứ tự \fname{SeqBuffer} \\
+    Transport & \fname{internal/transport} & Truyền tin cậy trên UDP, mã hóa, ghép kênh nhiều stream độc lập,
+    điều khiển luồng và tắc nghẽn \\
     \bottomrule
   \end{tabularx}
 \end{table}
 
-Tầng ứng dụng chỉ làm việc với interface \fname{transport.Endpoint} (\cref{sec:api}). Qua interface này, tầng ứng
-dụng chỉ cần gửi một message, mở một stream dài để gửi file, và nhận lại các đoạn byte đã được sắp đúng thứ tự.
-Mọi chi tiết liên quan tới UDP như chia gói, ACK, gửi lại hay mã hóa đều nằm trong tầng transport, tầng ứng dụng
-không cần biết tới.
+Giữa tầng ứng dụng và tầng transport, nhóm giao tiếp thông qua một interface chung là \fname{transport.Endpoint}
+(\cref{sec:api}). Nhờ lớp trừu tượng này, phần code ở \fname{server} và \fname{client} chỉ cần gọi hàm gửi một
+bản tin ngắn, mở một stream dài để truyền file, hoặc đọc các mảnh byte đã được sắp xếp đúng thứ tự từ channel
+nhận về. Toàn bộ phần việc nặng ở dưới như chia nhỏ gói tin, đánh số thứ tự, gửi ACK, truyền lại gói mất hay mã
+hóa đều được gói gọn bên trong \fname{internal/transport}.
 
 \subsection{Đối chiếu với 10 bước của đề}
 \label{subsec:rubric}
@@ -82,34 +70,36 @@ không cần biết tới.
   \textbf{Bước} & \textbf{Yêu cầu} & \textbf{Cách đáp ứng} & \textbf{Ở đâu} \\
   \midrule
   \endhead
-  1 & Thiết kế giao thức & Gói UDP $\le$ 1200 byte, 4 loại frame, nhiều stream ghép kênh trong 1 kết nối,
-  nội dung stream MESSAGE/FILE & \cref{sec:giao-thuc} \\
-  2 & Handshake TCP & \texttt{HELLO} $\to$ \texttt{KEYX} $\to$ \texttt{AUTH} $\to$
-  \texttt{AUTH\_OK}/\texttt{AUTH\_FAIL}, mỗi message đóng khung \texttt{[len][JSON]}; server dành một goroutine
-  cho mỗi handshake, deadline 10 s & \cref{subsec:handshake}, \cref{fig:seq-login} \\
-  3 & Đăng nhập, quản lý trạng thái & \texttt{users.json} chỉ lưu \texttt{sha256(salt $\|$ pass)};
-  \fname{Registry} (RWMutex) tra session theo tên và theo \texttt{conn\_id}, từ chối đăng nhập trùng ngay trong
-  lúc giữ khóa; server ghi đè \texttt{From} nên không giả danh được; danh sách online phát lại cho mọi người khi có
-  người vào/ra & \cref{sec:kien-truc}, \cref{sec:bao-mat} \\
-  4 & Concurrency & Transport: 1 goroutine sở hữu state của mỗi kết nối, giao tiếp qua channel. Server: mỗi
-  session có goroutine đọc (\fname{serveSession}) và goroutine ghi (\fname{writeLoop}) với hàng đợi riêng, nên
-  một client chậm không chặn người khác; 20 client đồng thời chạy ổn định (\cref{tab:he-thong})
-  & \cref{subsec:concurrency}, \cref{sec:kien-truc} \\
-  5 & Streaming nhạy thời gian & Mỗi tin = 1 stream ưu tiên cao; không HoL ở cả phía gửi và phía nhận
-  & \cref{sec:hol} \\
-  6 & Truyền file tin cậy qua UDP & SACK, phát hiện mất 3 cách, gửi lại chỉ frame bị mất, ghép theo offset,
-  SHA-256 đầu cuối & \cref{sec:tin-cay} \\
-  7 & Resilience & Keep-alive 2 s, idle timeout 10 s, \texttt{CLOSE}, bỏ im lặng gói hỏng/giả mạo,
-  RTO backoff. Server: \texttt{recover()} trong goroutine của mỗi session, xóa session idempotent, gói rác
-  trên cả hai cổng bị bỏ qua. Client: tự kết nối lại với backoff 1--30 s, Ctrl+C gửi \texttt{CLOSE}
+  1 & Thiết kế giao thức & Gói UDP $\le$ 1200 byte, 4 loại frame, ghép kênh nhiều stream trong một kết nối,
+  phân loại stream MESSAGE và FILE & \cref{sec:giao-thuc} \\
+  2 & Handshake TCP & Chuỗi bản tin \texttt{HELLO} $\to$ \texttt{KEYX} $\to$ \texttt{AUTH} $\to$
+  \texttt{AUTH\_OK}/\texttt{AUTH\_FAIL} đóng khung \texttt{[len][JSON]}; mỗi phiên handshake chạy trên một
+  goroutine riêng với deadline 10 s & \cref{subsec:handshake}, \cref{fig:seq-login} \\
+  3 & Đăng nhập, quản lý trạng thái & File \texttt{users.json} chỉ lưu \texttt{sha256(salt $\|$ pass)};
+  \fname{Registry} dùng \texttt{RWMutex} tra cứu session theo username và \texttt{conn\_id}, chặn đăng nhập
+  trùng ngay trong lúc giữ khóa; server tự ghi đè trường \texttt{From} để chống giả mạo; tự động broadcast lại
+  danh sách online khi có người vào/ra & \cref{sec:kien-truc}, \cref{sec:bao-mat} \\
+  4 & Concurrency & Transport: mỗi kết nối có đúng 1 goroutine giữ state, giao tiếp qua channel. Server: mỗi
+  session tách riêng goroutine đọc (\fname{serveSession}) và goroutine ghi (\fname{writeLoop}) kèm hàng đợi
+  riêng, tránh việc một client đọc chậm làm nghẽn cả server; chạy ổn định với 20 client đồng thời
+  (\cref{tab:he-thong}) & \cref{subsec:concurrency}, \cref{sec:kien-truc} \\
+  5 & Streaming nhạy thời gian & Mỗi tin nhắn đi trên 1 stream ưu tiên cao riêng biệt; loại bỏ HoL ở cả chiều
+  gửi lẫn chiều nhận & \cref{sec:hol} \\
+  6 & Truyền file tin cậy qua UDP & Cơ chế SACK, phát hiện mất gói theo 3 điều kiện, chỉ truyền lại đúng frame bị
+  mất, ghép dữ liệu theo offset, kiểm tra toàn vẹn bằng SHA-256 đầu cuối & \cref{sec:tin-cay} \\
+  7 & Resilience & Keep-alive 2 s, idle timeout 10 s, frame \texttt{CLOSE}, bỏ qua gói lỗi/giả mạo,
+  RTO exponential backoff. Server bọc \texttt{recover()} cho từng session và dọn dẹp session an toàn. Client hỗ
+  trợ tự kết nối lại (backoff 1--30 s) và bắt tín hiệu Ctrl+C để gửi \texttt{CLOSE} trước khi thoát
   & \cref{subsec:song-chet}, \cref{subsec:state} \\
-  8 & Bảo mật & ECDH X25519 + AES-256-GCM, header là AAD, nonce không bao giờ lặp & \cref{sec:bao-mat} \\
-  9 & Giao diện HTTP + JS thuần & HTTP/1.1 tự viết trên \fname{net.Listen} (đọc request line, header,
-  \texttt{Content-Length}); trang HTML + JavaScript thuần poll \texttt{/api/events?since=N}; upload file bằng
-  \texttt{POST} thân thô; file tĩnh nhúng vào binary bằng \texttt{embed} & \cref{sec:kien-truc} \\
-  10 & Test, chất lượng code & \fname{go vet}, \fname{go test -race}; test đơn vị protocol/transport; test
-  tích hợp server (\fname{FakePair}) và test hệ thống (server + 2 client thật qua UDP, loss 10\%); phép đo trên
-  mạng giả lập & \cref{sec:kiem-thu} \\
+  8 & Bảo mật & Trao đổi khóa ECDH X25519 kết hợp AES-256-GCM, gắn header làm AAD, đảm bảo nonce không trùng lặp
+  & \cref{sec:bao-mat} \\
+  9 & Giao diện HTTP + JS thuần & Tự cài đặt parser HTTP/1.1 trực tiếp trên \fname{net.Listen} (xử lý request
+  line, header, \texttt{Content-Length}); giao diện HTML + JS thuần dùng cơ chế polling
+  \texttt{/api/events?since=N}; upload file qua \texttt{POST} raw body; nhúng file tĩnh vào binary bằng
+  \texttt{embed} & \cref{sec:kien-truc} \\
+  10 & Test, chất lượng code & Kiểm tra \fname{go vet} và \fname{go test -race}; viết unit test cho
+  protocol/transport, integration test cho server (\fname{FakePair}) và end-to-end test qua UDP thật với loss
+  10\%; đo đạc hiệu năng trên bộ giả lập mạng & \cref{sec:kiem-thu} \\
   \bottomrule
 \end{longtable}
 

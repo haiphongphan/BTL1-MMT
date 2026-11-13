@@ -1,11 +1,12 @@
 \section{Kiến trúc hệ thống}
 \label{sec:kien-truc}
 
-Hệ thống gồm một server và nhiều client. Mỗi client là một process trên máy người dùng; trình duyệt chỉ nói
-chuyện với process đó qua HTTP trên \texttt{127.0.0.1}, còn mọi thứ đi ra mạng đều là UDP đã mã hóa (trừ
-handshake TCP lúc đăng nhập). Kiến trúc bên trong tầng transport (một goroutine sở hữu state của mỗi kết nối)
-đã mô tả ở \cref{subsec:concurrency}; mục này mô tả các thành phần còn lại và luồng dữ liệu giữa chúng
-(\cref{fig:kien-truc}).
+Hệ thống được triển khai theo mô hình một server trung tâm và nhiều client. Vì trình duyệt web không có API để
+mở trực tiếp socket UDP thô, mỗi client được thiết kế thành một process chạy cục bộ trên máy người dùng. Trình
+duyệt chỉ giao tiếp với process client này qua HTTP trên \texttt{127.0.0.1}, còn toàn bộ dữ liệu đi ra mạng LAN
+giữa client và server đều đi qua kênh UDP đã mã hóa (ngoại trừ bước handshake ban đầu dùng TCP để trao đổi khóa
+và đăng nhập). Cấu trúc nội bộ của tầng transport sẽ được trình bày chi tiết ở \cref{subsec:concurrency}; chương
+này tập trung vào cách nhóm tổ chức các thành phần ở tầng ứng dụng và luồng dữ liệu tổng thể (\cref{fig:kien-truc}).
 
 \begin{figure}[H]
   \centering
@@ -46,39 +47,55 @@ handshake TCP lúc đăng nhập). Kiến trúc bên trong tầng transport (m�
   \label{fig:kien-truc}
 \end{figure}
 
-\paragraph{Server.} Có ba nhóm goroutine.
+\paragraph{Phía Server.} Hoạt động của server được chia thành ba nhóm goroutine chính:
 \begin{enumerate}[label=(\arabic*), leftmargin=*, itemsep=2pt]
-  \item \fname{ListenTCP} nhận kết nối trên cổng 9000; mỗi handshake chạy trong một goroutine có deadline 10 s nên
-        client treo giữa chừng không giữ goroutine mãi. Đăng nhập xong, server gọi \fname{Mux.Accept(conn\_id,
-        $k_\text{udp}$)} để tạo \fname{transport.Conn} cho kết nối UDP sắp tới và gắn nó vào \fname{Session}.
-  \item Mỗi session có hai goroutine. \fname{serveSession} đọc \texttt{Recv()}, phân loại stream theo byte đầu:
-        message thì gom tới FIN rồi định tuyến; file thì đọc meta ở đầu stream rồi chuyển tiếp từng mảnh sang
-        goroutine \fname{relayFile} của file đó. \fname{writeLoop} là goroutine \emph{duy nhất} gọi
-        \texttt{SendMessage} cho session, đọc từ hàng đợi \texttt{sendCh} (64 tin): thứ tự gửi được giữ và một
-        người nhận chậm chỉ làm đầy hàng đợi của chính họ (\cref{subsec:app}).
-  \item \fname{Mux.readLoop} đọc socket UDP chung, tra \texttt{conn\_id} trong header rồi đẩy gói vào đúng
-        \fname{Conn}; mỗi \fname{Conn} lại có goroutine \fname{run} riêng của tầng transport.
+  \item \fname{ListenTCP} mở cổng 9000 để đón các kết nối đăng nhập. Mỗi phiên handshake được xử lý trong một
+        goroutine riêng kèm deadline 10 giây, tránh trường hợp client kết nối rồi treo giữa chừng làm rò rỉ
+        goroutine. Ngay khi xác thực thành công, server gọi \fname{Mux.Accept(conn\_id, $k_\text{udp}$)} để
+        khởi tạo sẵn đối tượng \fname{transport.Conn} cho kênh UDP và gắn vào \fname{Session}.
+  \item Mỗi \fname{Session} đang hoạt động có hai goroutine phụ trách đọc và ghi độc lập. Goroutine
+        \fname{serveSession} liên tục đọc từ \texttt{Recv()} và phân loại stream dựa vào byte đầu tiên: nếu là
+        bản tin (message) thì gom đủ tới cờ FIN rồi đem đi định tuyến; nếu là file thì đọc phần metadata ở đầu
+        stream rồi đẩy từng mảnh dữ liệu sang goroutine \fname{relayFile} để chuyển tiếp. Ở chiều ngược lại,
+        \fname{writeLoop} là goroutine \emph{duy nhất} được phép gọi \texttt{SendMessage} xuống kết nối của
+        session đó, lấy tin từ hàng đợi \texttt{sendCh} (kích thước 64 tin). Cách tách này giúp giữ đúng thứ tự
+        bản tin gửi đi, đồng thời nếu một client có mạng chậm thì cũng chỉ làm đầy hàng đợi \texttt{sendCh} của
+        chính họ chứ không làm nghẽn các client khác (\cref{subsec:app}).
+  \item Ở tầng dưới, \fname{Mux.readLoop} đọc chung một socket UDP duy nhất tại cổng 9001, dựa vào trường
+        \texttt{conn\_id} trong header gói để phân phối về đúng \fname{Conn} của từng client; bản thân mỗi
+        \fname{Conn} lại có một goroutine \fname{run} riêng để quản lý trạng thái truyền tin cậy.
 \end{enumerate}
-\fname{Registry} là nguồn sự thật về ai đang online, bảo vệ bằng \texttt{RWMutex}. Mọi hàm của nó chỉ làm việc
-với map rồi thả khóa; việc gửi tin luôn làm sau khi đã thả khóa trên một bản sao danh sách (\fname{Snapshot}),
-nên không có goroutine nào bị kẹt trong khóa vì mạng chậm. Với 20 client, server có 4 goroutine cho mỗi client
-cộng vài goroutine nền, tổng 84 (\cref{tab:he-thong}).
+Danh sách các phiên đang online được quản lý tập trung tại \fname{Registry} và đồng bộ bằng \texttt{RWMutex}.
+Để tránh giữ lock lâu khi mạng bị nghẽn, mọi phương thức của \fname{Registry} chỉ thao tác nhanh trên map trong
+bộ nhớ rồi nhả lock ngay; khi cần broadcast tin nhắn cho nhiều người, server lấy một bản sao danh sách session
+(\fname{Snapshot}), thả lock ra rồi mới bắt đầu gửi. Nhờ vậy, khi chạy thử với 20 client đồng thời, mỗi client
+chỉ chiếm 4 goroutine (cộng thêm vài goroutine nền của server là 84--86 goroutine, xem \cref{tab:he-thong}).
 
-\paragraph{Client.} \fname{client/core} giữ \fname{Endpoint} hiện tại và một goroutine \fname{listenLoop} ghép
-các stream nhận được, sắp lại tin theo \texttt{Seq} và ghi mọi sự kiện (chat, DM, danh sách user, tiến độ file,
-trạng thái kết nối) vào \fname{EventLog} có số thứ tự tăng dần. Khi \texttt{Done()} của kết nối đóng mà không
-phải do người dùng thoát, nó chuyển sang trạng thái \textsc{Reconnecting} và handshake lại (\cref{subsec:state}).
-\fname{webui} là HTTP/1.1 tự viết trên \fname{net.Listen}: mỗi kết nối một goroutine, đọc request line, các
-header tới dòng trống, thân qua \texttt{LimitReader(Content-Length)}; không dùng \fname{net/http}. Trang HTML, JS
-và CSS được nhúng vào binary bằng \texttt{embed}. Trình duyệt poll \texttt{/api/events?since=N} mỗi 400 ms và
-\texttt{/api/status} mỗi 1 s (RTT, cwnd, in-flight, tỉ lệ mất gói lấy từ \fname{transport.Stats}); vì sự kiện
-có số thứ tự, mở nhiều tab hay tải lại trang không làm mất hay trùng tin. Upload gửi thẳng nội dung file làm
-thân \texttt{POST /api/upload?to=\&name=}; \fname{webui} ghi ra file tạm rồi gọi \fname{SendFile} trong goroutine
-riêng, tiến độ gửi/nhận đi qua \fname{EventLog} thành thanh tiến trình.
+\paragraph{Phía Client.} Package \fname{client/core} quản lý kết nối \fname{Endpoint} hiện tại và chạy goroutine
+\fname{listenLoop} để nhận dữ liệu từ server, sắp xếp lại tin nhắn theo số thứ tự \texttt{Seq}, rồi ghi toàn bộ
+sự kiện (tin chat chung, DM, cập nhật danh sách online, tiến độ truyền file, trạng thái kết nối) vào một bộ đệm
+\fname{EventLog} có đánh số thứ tự tăng dần. Nếu channel \texttt{Done()} của kết nối bị đóng mà không phải do
+người dùng chủ động thoát, client sẽ tự chuyển sang trạng thái \textsc{Reconnecting} và thực hiện handshake lại
+(\cref{subsec:state}).
 
-\paragraph{Luồng một tin nhắn riêng.} Trình duyệt A $\to$ \texttt{POST /api/send} $\to$ \fname{SendDM} cấp
-\texttt{Seq} và mở một stream ưu tiên cao $\to$ UDP $\to$ \fname{serveSession} của A đưa qua \fname{SeqBuffer},
-ghi đè \texttt{From} $\to$ \fname{Registry.GetByName} $\to$ \texttt{sendCh} của B $\to$ \fname{writeLoop} đánh
-\texttt{Seq} theo dãy của B $\to$ UDP $\to$ \fname{listenLoop} của B $\to$ \fname{EventLog} $\to$ poll $\to$
-trình duyệt B. Chi tiết theo thời gian ở \cref{fig:seq-dm}; file đi tương tự nhưng theo kiểu pipeline
-(\cref{fig:seq-file}).
+Ở tầng giao diện, nhóm tự viết một HTTP/1.1
+server nhỏ gọn trong \fname{webui} trực tiếp trên \fname{net.Listen}: mỗi request được một goroutine đọc phần
+request line, parse các dòng header cho tới dòng trống và đọc phần body thông qua
+\texttt{LimitReader(Content-Length)}. Các file HTML, CSS và JS thuần được đóng gói sẵn vào file thực thi nhờ
+package \texttt{embed}. Phía trình duyệt gọi định kỳ (polling) tới \texttt{/api/events?since=N} mỗi 400 ms để lấy
+sự kiện mới và gọi \texttt{/api/status} mỗi 1 giây để cập nhật thông số mạng (RTT, cwnd, in-flight bytes, tỉ lệ
+mất gói lấy từ \fname{transport.Stats}). Nhờ mỗi sự kiện trong \fname{EventLog} đều có chỉ số tăng dần, việc
+người dùng F5 tải lại trang hay mở nhiều tab trình duyệt cùng lúc đều không làm mất hay lặp tin nhắn. Khi gửi
+file, trình duyệt đẩy thẳng nội dung file vào body của \texttt{POST /api/upload?to=\&name=}; \fname{webui} lưu
+tạm ra đĩa rồi gọi \fname{SendFile} chạy ngầm trong một goroutine khác và cập nhật phần trăm hoàn thành qua
+\fname{EventLog}.
+
+\paragraph{Luồng đi của một tin nhắn riêng (DM).} Để hình dung sự phối hợp giữa các khối trên, xét trường hợp
+người dùng A nhắn tin riêng cho B: trình duyệt của A gửi request \texttt{POST /api/send} xuống \fname{webui},
+từ đó gọi hàm \fname{SendDM} để cấp số thứ tự \texttt{Seq} và mở một stream ưu tiên cao gửi qua UDP lên server.
+Tại server, \fname{serveSession} của A nhận đủ stream, đưa qua \fname{SeqBuffer} để đảm bảo thứ tự, gán đè lại
+trường \texttt{From} = A rồi tra \fname{Registry.GetByName} để tìm session của B và đẩy tin vào hàng đợi
+\texttt{sendCh} của B. Tiếp đó, goroutine \fname{writeLoop} của B lấy tin ra, đánh lại \texttt{Seq} theo dãy số
+dành riêng cho B rồi gửi qua UDP xuống client B. Cuối cùng, \fname{listenLoop} ở máy B nhận tin, ghi vào
+\fname{EventLog} để trình duyệt của B lấy lên trong chu kỳ poll kế tiếp. Sơ đồ chi tiết theo thời gian của luồng
+này và luồng truyền file theo kiểu pipeline được vẽ ở \cref{fig:seq-dm,fig:seq-file}.
