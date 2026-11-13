@@ -67,7 +67,7 @@ Hai package \fname{internal/protocol} (20 test) và \fname{internal/transport} (
   trong cùng một gói; dữ liệu bị cắt cụt hoặc mã \texttt{type} lạ đều trả về lỗi chứ không panic; chuỗi
   \texttt{reason} của frame CLOSE được cắt đúng ranh giới ký tự UTF-8 \\
   Handshake, meta file & Đọc/ghi liên tiếp các khung \texttt{[len][JSON]}; từ chối khung khai báo độ dài vượt
-  ngưỡng; \fname{FileHeaderParser} tách đúng metadata ngay cả khi dữ liệu được mớm vào từng byte một \\
+  ngưỡng; \fname{FileHeaderParser} tách đúng metadata ngay cả khi dữ liệu được truyền vào từng byte một \\
   \fname{SeqBuffer} & Sắp xếp lại bản tin đến sai thứ tự (kể cả hoán vị ngẫu nhiên); lọc bỏ bản tin trùng số
   \texttt{Seq}; tự nhảy qua khoảng trống khi vượt ngưỡng \texttt{MaxSeqPending} để tránh treo \\
   ACK & Sinh đúng các khoảng SACK khi có gói bị khuyết hoặc gói trùng; giới hạn tối đa 8 khoảng SACK và giới hạn
@@ -143,10 +143,14 @@ thật giao tiếp qua socket UDP localhost với mức rớt gói 10\% ở mỗ
 truyền file 5 MB khớp mã băm SHA-256, tin nhắn DM gửi xen giữa lúc đang tải file vẫn tới ngay lập tức, và danh
 sách online tự cập nhật khi một bên đóng kết nối. Toàn bộ các test này đều được chạy kèm cờ \texttt{-race}.
 
-Bảng dưới là các kịch bản chạy bằng binary thật (server, client với Web UI, gọi qua \texttt{/api}) trên macOS
-(Apple Silicon), Go 1.27, loopback, mỗi bên \texttt{-loss 0.1} trừ khi ghi khác; đo ngày 13/11/2026.
-Test tích hợp \fname{TestSlowReceiverIsDisconnected} kiểm tra thêm trường hợp người nhận không đọc: người gửi
-không bị chặn, chỉ người nhận đó bị ngắt.
+Bên cạnh đó, test tích hợp \fname{TestSlowReceiverIsDisconnected} kiểm tra thêm trường hợp một người nhận ngưng đọc
+làm đầy hàng đợi: các người gửi khác vẫn hoạt động bình thường không bị chặn, và chỉ riêng kết nối của người nhận
+chậm đó bị server ngắt.
+
+Để kiểm chứng toàn hệ thống ở mức sát thực tế nhất, nhóm biên dịch và chạy trực tiếp các file thực thi của
+\fname{server} và \fname{client} (kèm Web UI, tương tác qua các endpoint \texttt{/api}) trên môi trường macOS
+(Apple Silicon, Go 1.27) qua giao diện loopback vào ngày 13/11/2026. Ở mọi kịch bản trong \cref{tab:he-thong}, cả
+hai phía đều được cấu hình mức rớt gói \texttt{-loss 0.1} (trừ khi có ghi chú riêng).
 
 \begin{longtable}{c L{0.27\linewidth} L{0.6\linewidth}}
   \caption{Test hệ thống với server và client thật}\label{tab:he-thong} \\

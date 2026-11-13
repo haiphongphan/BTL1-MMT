@@ -21,17 +21,21 @@ nhắn tin riêng, truyền file) chạy trên giao thức tùy chỉnh trên n�
 
 Ở tầng ứng dụng và giao diện:
 \begin{itemize}
-  \item Server phục vụ 20 client đồng thời với số goroutine cố định (4 cho mỗi client, tổng 86) và bộ nhớ
-        ổn định khoảng 15 MB; chat, tin riêng và file đi qua cùng một kết nối UDP, đúng người nhận, đúng thứ tự gửi nhờ
+  \item Server phục vụ ổn định 20 client đồng thời với số lượng goroutine cố định (4 goroutine cho mỗi client, tổng
+        cộng 86 goroutine) và mức tiêu thụ bộ nhớ duy trì quanh khoảng 15 MB; các luồng chat chung, tin nhắn riêng
+        và truyền file đều đi qua cùng một kết nối UDP, đến đúng người nhận và giữ đúng thứ tự nhờ cơ chế đánh số
         \texttt{Seq} ở tầng ứng dụng.
-  \item File được chuyển tiếp theo kiểu pipeline nên bộ nhớ server không phụ thuộc kích thước file; người nhận
-        kiểm tra SHA-256 đầu cuối; tin chat gửi trong lúc truyền file 200 MB vẫn tới trong khoảng 0,1 s.
-  \item Giao diện web chạy trên HTTP/1.1 tự viết với JavaScript thuần: danh sách user, tab chat chung và riêng,
-        gửi file kèm thanh tiến trình ở cả hai đầu, trạng thái kết nối với RTT, cwnd và tỉ lệ mất gói.
-  \item Client tự tìm server trong LAN qua broadcast (\texttt{-server auto}); server theo dõi IP:port của từng
-        user và hiện trong danh sách user.
-  \item Client tự kết nối lại khi server khởi động lại và báo \texttt{CLOSE} ngay khi thoát; server tắt bằng
-        Ctrl+C cũng báo mọi client, nên không ai phải chờ idle timeout.
+  \item Luồng truyền file qua server được chuyển tiếp theo kiểu pipeline nên bộ nhớ của server không tăng theo kích
+        thước file; phía người nhận tự động kiểm tra mã băm SHA-256 đầu cuối; các tin nhắn chat gửi xen kẽ trong lúc
+        đang truyền file 200 MB vẫn tới đích trong khoảng 0,1 giây.
+  \item Giao diện web hoạt động trên HTTP/1.1 server tự viết kết hợp với JavaScript thuần, hỗ trợ đầy đủ danh sách
+        người dùng online, chuyển tab chat chung và chat riêng, gửi file kèm thanh tiến trình ở cả hai đầu, cùng
+        thanh trạng thái hiển thị trực tiếp RTT, cwnd và tỉ lệ mất gói.
+  \item Client có khả năng tự động tìm server trong mạng LAN qua gói UDP broadcast (\texttt{-server auto}); phía
+        server ghi nhận địa chỉ IP:port UDP thực tế của từng tài khoản và đồng bộ lên danh sách online.
+  \item Client tự động kết nối lại với cơ chế backoff khi mất kết nối hoặc khi server khởi động lại, đồng thời cả
+        client lẫn server đều chủ động phát gói \texttt{CLOSE} khi tắt bằng Ctrl+C để phía bên kia cập nhật trạng
+        thái ngay mà không phải chờ hết idle timeout.
 \end{itemize}
 
 \subsection{Hướng phát triển}
@@ -48,6 +52,6 @@ Nếu có thêm thời gian phát triển tiếp dự án, nhóm dự định n�
         stream file và lấy frame theo kiểu xoay vòng (round-robin) để một file nhỏ gửi sau không phải đợi file
         lớn gửi trước.
   \item \textbf{Truyền file ngang hàng (P2P) trực tiếp giữa hai client:} tận dụng server làm kênh báo hiệu để hai
-        client trong cùng mạng LAN hoặc qua NAT thực hiện UDP hole punching và bắn các gói STREAM chứa file trực
+        client trong cùng mạng LAN hoặc qua NAT thực hiện UDP hole punching và truyền các gói STREAM chứa file trực
         tiếp cho nhau, giúp giảm tải băng thông chuyển tiếp cho server.
 \end{itemize}

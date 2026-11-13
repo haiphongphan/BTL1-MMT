@@ -49,7 +49,7 @@ hiện và sửa trong quá trình làm bài (xem thử thách~\ref{tt:nonce}).
 \paragraph{Xử lý gói lỗi và chống phát lại (replay).} Khi nhận một gói UDP bị sai magic/version, mang
 \texttt{conn\_id} không tồn tại hoặc giải mã GCM thất bại, bên nhận chỉ âm thầm bỏ qua gói đó mà không gửi bất kỳ
 bản tin báo lỗi nào trả lại. Cách xử lý im lặng này vừa tránh tiết lộ thông tin cho bên dò quét, vừa ngăn kẻ tấn
-công giả mạo địa chỉ IP để bắn gói rác làm ngắt kết nối thật.
+công giả mạo địa chỉ IP để gửi gói rác làm ngắt kết nối thật.
 
 Ngoài ra, địa chỉ IP:port UDP của phía bên kia chỉ được cập nhật khi gói tin đến có \texttt{packet\_num} lớn hơn
 mốc cao nhất từng thấy \emph{và đã vượt qua bước xác thực GCM}, theo cùng nguyên tắc cập nhật địa chỉ của QUIC

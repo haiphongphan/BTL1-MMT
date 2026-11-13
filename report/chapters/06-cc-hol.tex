@@ -209,7 +209,7 @@ func (c *Conn) takeFrames() []*protocol.StreamFrame {
 
 \paragraph{Thực nghiệm kiểm chứng} (\fname{TestLongHoL}). Nhóm thiết lập đường truyền giả lập có băng thông
 1 MB/s, độ trễ 20 ms mỗi chiều, bộ đệm 64 KB và tỉ lệ rớt gói 1\%. Trong khi một file 6 MB đang được truyền liên
-tục làm bão hòa băng thông, cứ mỗi 100 ms nhóm lại bắn một tin nhắn chat và đo độ trễ một chiều từ lúc gọi hàm gửi
+tục làm bão hòa băng thông, cứ mỗi 100 ms nhóm lại gửi một tin nhắn chat và đo độ trễ một chiều từ lúc gọi hàm gửi
 cho tới khi đầu bên kia nhận được tin. Để thấy rõ tác dụng của hàng đợi ưu tiên, nhóm đo so sánh với một phiên bản
 thử nghiệm cố tình đẩy cả tin nhắn chat vào chung hàng đợi \texttt{bulkQ} với file (\cref{tab:hol}).
 

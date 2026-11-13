@@ -11,7 +11,7 @@ những vấn đề đáng nhớ nhất ở cả hai tầng cùng cách nhóm t�
   \item \label{tt:cubic-cham}\textbf{Tốc độ truyền với CUBIC bị tụt tới 280 lần khi bật loss 10\%.} Khi in log giá
         trị \texttt{cwnd} ra kiểm tra, nhóm thấy cửa sổ gần như luôn bị ghim ở mức sàn 2 gói. Với chỉ 2 gói được
         phép bay trên mạng cùng lúc, bên gửi không bao giờ nhận được đủ 3 gói đi sau vượt mặt để kích hoạt truyền
-        lại nhanh, dẫn tới mọi lần rớt gói đều phải ngồi chờ hết bộ hẹn giờ RTO. Tệ hơn nữa, lúc đầu nhóm đặt
+        lại nhanh, dẫn tới mọi lần rớt gói đều phải chờ hết bộ hẹn giờ RTO. Tệ hơn nữa, lúc đầu nhóm đặt
         RTO tối thiểu bằng 200 ms theo thói quen của TCP trong khi RTT thực trên loopback chỉ khoảng 0,4 ms.
         \emph{Cách giải quyết:} nhóm bổ sung thêm điều kiện phát hiện mất gói theo ngưỡng thời gian (sau
         $\tfrac98\,\text{RTT}$ kể từ lúc gửi nếu đã có gói đi sau được ACK), đồng thời chuyển sang công thức PTO
@@ -82,27 +82,27 @@ những vấn đề đáng nhớ nhất ở cả hai tầng cùng cách nhóm t�
 \end{enumerate}
 
 \subsection{Tầng ứng dụng}
-<<<<<<< HEAD
 \begin{enumerate}[label=\textbf{\arabic*.}, leftmargin=*, itemsep=4pt]
   \item \textbf{Tin nhắn đến người nhận bị đảo thứ tự do gọi \texttt{go Send()} tràn lan.} Ban đầu, để vòng lặp
         đọc của server không bị chặn khi broadcast tin nhắn cho nhiều người, nhóm tạo một goroutine mới cho mỗi
         lần gửi (\texttt{go session.Send(msg)}). Vì bộ lập lịch của Go không đảm bảo goroutine nào tạo trước sẽ
         chạy trước, khi gửi 20 tin liên tiếp thì phía nhận thường xuyên thấy tin số 2 hiện lên trước tin số 1 ngay
         cả khi mạng không mất gói nào. \emph{Cách giải quyết:} mỗi session được cấp một hàng đợi \texttt{sendCh}
-        riêng và chỉ có duy nhất một goroutine \fname{writeLoop} lấy tin ra gọi \texttt{SendMessage} tuần tự.
-  \item \textbf{Một client bị treo làm kẹt toàn bộ việc định tuyến trên server.} Nếu server vừa giữ khóa
-        \fname{Registry} vừa gọi hàm gửi mạng, hoặc đẩy vào channel \texttt{sendCh} theo kiểu chặn (blocking),
-        chỉ cần một client bị đơ (làm cửa sổ nhận về 0 và \texttt{sendCh} đầy) là goroutine định tuyến của người
-        gửi sẽ bị treo theo, kéo sập cả phòng chat. \emph{Cách giải quyết:} server chỉ giữ khóa \fname{Registry}
-        để chép nhanh danh sách con trỏ session ra ngoài (\fname{Snapshot}) rồi nhả khóa ngay trước khi gửi; đồng
-        thời thao tác đẩy vào \texttt{sendCh} dùng \texttt{select} có nhánh \texttt{default} để bỏ qua tin mới nếu
-        hàng đợi của người nhận đó đã đầy 64 tin. Kéo theo đó, việc đánh số thứ tự \texttt{Seq} cho người nhận
-        phải được dời vào bên trong \fname{writeLoop} (\emph{sau} khi đã rút từ \texttt{sendCh}) để những tin bị
-        rớt khỏi hàng đợi không làm khuyết số \texttt{Seq} khiến \fname{SeqBuffer} ở client chờ mãi
+        riêng và chỉ có duy nhất một goroutine \fname{writeLoop} lấy tin ra gọi \texttt{SendMessage} tuần tự, kèm
+        test tự động gửi 20 tin liên tiếp để kiểm tra thứ tự.
+  \item \textbf{Một người nhận đọc chậm hoặc bị treo làm kẹt toàn bộ việc định tuyến trên server.} Nếu server vừa
+        giữ khóa \fname{Registry} vừa gọi hàm gửi mạng, hoặc đẩy vào channel \texttt{sendCh} theo kiểu chặn
+        (blocking), chỉ cần một client bị đơ (làm cửa sổ nhận về 0 và \texttt{sendCh} đầy) là goroutine định tuyến
+        của người gửi sẽ bị treo theo, kéo sập cả phòng chat. Ở phiên bản đầu, nhóm thử sửa bằng cách bỏ qua tin mới
+        khi hàng đợi đầy, nhưng cách này làm mất tin nhắn một cách lặng lẽ và để lại khoảng trống \texttt{Seq} khiến
+        \fname{SeqBuffer} ở client đứng chờ. \emph{Cách giải quyết:} server chỉ giữ khóa \fname{Registry} để chép
+        nhanh danh sách con trỏ session ra ngoài (\fname{Snapshot}) rồi nhả khóa ngay trước khi gửi; thao tác đẩy
+        vào \texttt{sendCh} (4096 tin) dùng \texttt{select} có nhánh \texttt{default}, và nếu hàng đợi của client
+        nào bị đầy tràn thì server chủ động ngắt kết nối của riêng client quá chậm đó để client tự kết nối lại
         (\cref{subsec:app}).
-  \item \textbf{Lọt hai phiên trùng username khi hai client đăng nhập cùng lúc.} Ban đầu nhóm viết hai hàm tách
+  \item \textbf{Lọt hai phiên trùng username khi hai client đăng nhập cùng lúc.} Ban đầu nhóm viết hai bước tách
         rời: gọi \fname{GetByName} để kiểm tra xem tên đó đã online chưa, nếu chưa thì mới gọi hàm thêm vào
-        \fname{Registry}. Khi test thử trường hợp hai client dùng cùng một tài khoản bắn bản tin \texttt{AUTH}
+        \fname{Registry}. Khi test thử trường hợp hai client dùng cùng một tài khoản gửi bản tin \texttt{AUTH}
         đồng thời, cả hai goroutine đều đi qua bước kiểm tra trước khi bên kia kịp ghi vào map. \emph{Cách giải
         quyết:} nhóm gộp bước kiểm tra và bước đăng ký vào chung một hàm nguyên tử \fname{AddPending} dưới cùng
         một lần giữ \texttt{Lock()}, trả về lỗi \texttt{ErrAlreadyOnline} ngay nếu tên đó đã tồn tại.
@@ -112,86 +112,51 @@ những vấn đề đáng nhớ nhất ở cả hai tầng cùng cách nhóm t�
         timeout mới gọi hàm xóa theo tên và xóa mất luôn phiên mới vừa tạo, biến client mới thành trạng thái
         ``bóng ma'' (vẫn nhận được tin nhưng biến mất khỏi danh sách online). \emph{Cách giải quyết:} hàm
         \fname{Registry.Remove(s *Session)} so sánh trực tiếp con trỏ \fname{Session} và chỉ xóa khỏi map nếu con
-        trỏ đang lưu vẫn đúng là phiên \texttt{s} đó, đồng thời thiết kế idempotent để gọi từ nhiều nơi (khi vòng
-        đọc thoát, khi \texttt{Done()} đóng, hoặc khi gặp lỗi ghi) mà không gây tác dụng phụ.
+        trỏ đang lưu vẫn đúng là phiên \texttt{s} hiện tại của tên đó, đồng thời thiết kế idempotent để gọi từ nhiều
+        nơi (khi vòng đọc thoát, khi \texttt{Done()} đóng, hoặc khi gặp lỗi ghi) mà không gây tác dụng phụ.
   \item \textbf{Phiên pending bị treo vĩnh viễn nếu client mất mạng ngay sau \texttt{AUTH\_OK}.} Nếu một
         client hoàn tất handshake TCP nhưng chưa kịp gửi gói UDP nào đã bị mất kết nối, phiên \textsc{Pending} sẽ
         giữ tên tài khoản đó ở trạng thái đang online mãi mãi khiến chính người đó không thể đăng nhập lại. Lúc đầu
-        nhóm định viết thêm một goroutine quét dọn timer riêng cho các phiên pending; \emph{Cách giải quyết:}
-        nhóm nhận ra chỉ cần gọi \fname{Mux.Accept} tạo sẵn đối tượng \fname{transport.Conn} ngay từ lúc trả
-        \texttt{AUTH\_OK}, khi đó nếu sau 10 giây không có gói UDP nào tới thì chính cơ chế idle timeout có sẵn
-        của tầng transport sẽ tự đóng kết nối và kích hoạt dọn dẹp session mà không tốn thêm bộ hẹn giờ nào.
-  \item \textbf{Truyền tiếp file kích thước lớn qua server mà không làm tràn RAM.} Nếu server gom toàn bộ file
-        200 MB vào bộ nhớ rồi mới gửi tiếp cho người nhận thì chỉ cần vài người gửi file cùng lúc là server sẽ hết
-        RAM. \emph{Cách giải quyết:} nhóm thiết kế cơ chế chuyển tiếp kiểu pipeline: ngay khi
-        \fname{FileHeaderParser} tách xong phần JSON metadata ở đầu stream (xử lý được cả trường hợp JSON bị cắt
-        ngang giữa hai mảnh \fname{Delivery}), server mở ngay một stream hướng tới người nhận và đẩy từng mảnh dữ
-        liệu qua một channel đệm 256 phần tử cho goroutine \fname{relayFile}. Nếu người nhận đọc chậm làm channel
-        này đầy, vòng đọc phía người gửi sẽ tự động chậm lại nhờ cơ chế điều khiển luồng của tầng transport.
-  \item \textbf{Tự động kết nối lại và đóng kết nối gọn khi bấm Ctrl+C.} Khi phát hiện mất kết nối ngoài ý muốn,
-        client chuyển sang trạng thái \textsc{Reconnecting} với thời gian chờ tăng dần 1, 2, 4\dots{} tới tối đa
-        30 s (nếu trong 10 s đầu server chưa kịp dọn phiên cũ và trả về \texttt{AUTH\_FAIL} báo đang online thì
-        các lần thử kế tiếp sẽ tự vào lại được). Ngoài ra, ở các bản đầu khi người dùng bấm Ctrl+C để tắt client,
-        tiến trình bị hệ điều hành dừng ngay mà không kịp gửi frame \texttt{CLOSE} nên mọi người trong phòng phải
-        đợi 10 s sau mới thấy danh sách online cập nhật. \emph{Cách giải quyết:} nhóm bắt tín hiệu
-        \texttt{SIGINT}/\texttt{SIGTERM} ở cả client lẫn server để chủ động gọi \texttt{Close()} phát gói
-        \texttt{CLOSE} trước khi thoát, rút ngắn thời gian cập nhật trạng thái xuống chỉ còn 0,05--0,2 giây
-        (\cref{tab:he-thong}).
+        nhóm định viết thêm một goroutine quét dọn timer riêng cho các phiên pending; \emph{cách giải quyết} gọn
+        hơn là gọi \fname{Mux.Accept} tạo sẵn đối tượng \fname{transport.Conn} ngay từ lúc trả \texttt{AUTH\_OK}:
+        khi đó nếu sau 10 giây không có gói UDP nào tới thì chính cơ chế idle timeout có sẵn của tầng transport sẽ
+        tự đóng kết nối và kích hoạt dọn dẹp session mà không tốn thêm bộ hẹn giờ mới.
+  \item \textbf{Chuyển tiếp file kích thước lớn qua server mà không làm tràn RAM.} Với kịch bản 20 client gửi file
+        200 MB cho nhau, nếu server gom toàn bộ file vào bộ nhớ rồi mới gửi tiếp cho người nhận thì server sẽ nhanh
+        chóng cạn RAM. \emph{Cách giải quyết:} nhóm thiết kế cơ chế chuyển tiếp kiểu pipeline: ngay khi
+        \fname{FileHeaderParser} gom và tách xong phần JSON metadata ở đầu stream (xử lý được cả trường hợp JSON bị
+        cắt ngang giữa hai mảnh \fname{Delivery} đầu tiên), server mở ngay một stream hướng tới người nhận và đẩy
+        từng mảnh dữ liệu qua một channel đệm 256 phần tử cho goroutine \fname{relayFile}. Khi người nhận đọc chậm
+        làm channel này đầy, vòng đọc phía người gửi sẽ bị chặn lại và cơ chế điều khiển luồng của tầng transport sẽ
+        tự động điều tiết bên gửi chậm theo.
+  \item \textbf{Tự động kết nối lại và đóng kết nối gọn khi bấm Ctrl+C.} Khi channel \texttt{Done()} đóng mà không
+        phải do người dùng chủ động thoát, client chuyển sang trạng thái \textsc{Reconnecting} với thời gian chờ
+        backoff tăng dần 1, 2, 4\dots{} tới tối đa 30 s (nếu trong 10 s đầu server chưa kịp dọn phiên cũ và trả về
+        \texttt{AUTH\_FAIL} báo đang online thì các lần thử kế tiếp sẽ tự vào lại được). Ngoài ra, ở các bản đầu khi
+        bấm Ctrl+C để tắt, tiến trình bị dừng ngay mà không kịp gửi frame \texttt{CLOSE} nên những người khác phải
+        chờ hết 10 s mới thấy danh sách online cập nhật. \emph{Cách giải quyết:} nhóm bắt tín hiệu
+        \texttt{SIGINT}/\texttt{SIGTERM} ở cả client lẫn server (phía server đóng \fname{Mux} để phát \texttt{CLOSE}
+        cho toàn bộ client đang kết nối) trước khi thoát, rút ngắn thời gian cập nhật trạng thái xuống chỉ còn
+        0,05--0,2 giây (\cref{tab:he-thong}).
+  \item \textbf{Tự động tìm server trong mạng LAN.} Ở phiên bản đầu, gói UDP broadcast ghi cứng cổng 9000 kèm địa
+        chỉ IP do server tự đoán (dẫn tới lấy sai IP khi máy chạy server có nhiều card mạng ảo). \emph{Cách giải
+        quyết:} server phát đúng số cổng TCP thực tế đang lắng nghe, còn phía client lấy IP của server trực tiếp từ
+        địa chỉ nguồn của gói UDP broadcast nhận được. Bên cạnh đó, để nhiều tiến trình client trên cùng một máy có
+        thể cùng lắng nghe cổng 9002 mà không bị lỗi trùng bind ở tiến trình thứ hai, nhóm bật tùy chọn
+        \texttt{SO\_REUSEADDR}/\texttt{SO\_REUSEPORT} trên socket (tách file cài đặt riêng cho Windows và Unix thông
+        qua build tag).
+  \item \textbf{Cờ giả lập mạng được truyền vào nhưng không có tác dụng.} Ở một phiên bản thử nghiệm, cờ dòng lệnh
+        \texttt{-jitter} đã được hàm \texttt{main} đọc vào nhưng lại quên gán xuống cấu hình của \fname{LossyConn};
+        lỗi này chỉ lộ ra khi nhóm kiểm tra thấy RTT đo được vẫn giữ nguyên ở mức 0,1 ms. \emph{Cách giải quyết:}
+        nhóm nối lại đầy đủ các tham số cấu hình và rút ra bài học tương tự thử thách~\ref{tt:jitter}: luôn phải
+        kiểm tra bộ giả lập bằng số đo thực tế (RTT, tỉ lệ mất gói) trước khi tin vào kết quả đo.
   \item \textbf{Tự cài đặt HTTP server cho Web UI khi không được dùng \fname{net/http}.} Vì phải làm việc trực tiếp
-        trên socket TCP, nhóm phải tự xử lý việc đọc từng dòng header, dùng \texttt{io.LimitReader} theo đúng
-        \texttt{Content-Length} và khi nhận file upload hàng trăm MB thì phải stream thẳng phần body từ socket ra
-        file tạm trên đĩa chứ không đọc dồn vào RAM, đồng thời gắn header \texttt{Connection: close} để đơn giản
-        hóa vòng đời kết nối HTTP. Trên trình duyệt, toàn bộ nội dung chat từ người khác gửi tới đều được đi qua
-        hàm escape ký tự HTML trước khi chèn vào DOM để tránh lỗi XSS; ngoài ra khi chạy client ở chế độ nền
-        (\texttt{< /dev/null}), dù luồng đọc \texttt{stdin} chạm \texttt{EOF} ngay lập tức nhưng tiến trình vẫn
-        được giữ sống chừng nào Web UI còn đang chạy.
-=======
-\begin{enumerate}[label=\textbf{\arabic*.}, leftmargin=*, itemsep=2pt]
-  \item \textbf{Tin tới sai thứ tự vì \texttt{go Send()}.} Bản đầu server gửi mỗi tin trong một goroutine mới
-        để không chặn vòng lặp đọc; Go không đảm bảo thứ tự chạy của các goroutine nên người nhận thấy tin ``2''
-        trước tin ``1'' ngay cả khi không mất gói. \emph{Giải pháp:} mỗi session một hàng đợi \texttt{sendCh} và
-        đúng một goroutine \fname{writeLoop} gọi \texttt{SendMessage}; test gửi 20 tin liên tiếp kiểm tra thứ tự.
-  \item \textbf{Một người nhận chậm làm kẹt cả server.} Nếu gửi trong lúc còn giữ khóa \fname{Registry}, hoặc
-        ghi vào hàng đợi theo kiểu chặn, một client treo (cửa sổ nhận về 0) giữ luôn goroutine của những người
-        khác. Bản đầu sửa bằng cách bỏ tin khi hàng đợi đầy, nhưng như vậy là mất tin lặng lẽ và để lại chỗ
-        trống \texttt{Seq}. \emph{Giải pháp:} \fname{Snapshot} danh sách rồi thả khóa mới gửi; ghi vào
-        \texttt{sendCh} (4096 tin) bằng \texttt{select} có \texttt{default}; đầy thì ngắt riêng client quá chậm
-        đó, client tự kết nối lại (\cref{subsec:app}).
-  \item \textbf{Đăng nhập trùng lọt qua khi hai client cùng tên đến cùng lúc.} ``Kiểm tra đã online chưa'' rồi
-        ``thêm vào registry'' là hai lần khóa riêng, giữa hai lần đó client kia chen vào được. \emph{Giải pháp:}
-        \fname{AddPending} kiểm tra và thêm trong cùng một lần giữ khóa, trả \texttt{ErrAlreadyOnline}.
-  \item \textbf{Xóa nhầm phiên mới của user vừa kết nối lại.} \fname{dropSession} xóa theo tên, nên khi một user
-        rớt mạng rồi đăng nhập lại ngay, kết nối cũ chết sau đó (idle timeout) xóa luôn phiên mới và người đó
-        thành ``ma'': không trong danh sách nhưng vẫn nhận được tin. \emph{Giải pháp:} \fname{Remove} so sánh con
-        trỏ session, chỉ xóa khi nó vẫn là phiên hiện tại của tên đó, và idempotent vì được gọi từ nhiều đường
-        (vòng đọc kết thúc, \texttt{Done()}, lỗi gửi).
-  \item \textbf{Session pending không bao giờ hết hạn.} Client đăng nhập xong mà không gửi gói UDP nào (mất
-        mạng đúng lúc đó) thì tên bị giữ ``online'' mãi, không ai đăng nhập lại được. Bản đầu định thêm một
-        timer riêng; \emph{giải pháp} gọn hơn là tạo \fname{transport.Conn} ngay sau \texttt{AUTH\_OK}: idle
-        timeout 10 s của chính transport đóng kết nối và dọn session, không cần cơ chế mới.
-  \item \textbf{Chuyển tiếp file mà không giữ cả file trong RAM.} Với 20 client gửi file 200 MB cho nhau, giữ
-        cả file ở server là không chấp nhận được. \emph{Giải pháp:} đọc meta ở đầu stream, mở ngay stream tới
-        người nhận và chuyển tiếp từng mảnh qua một kênh 256 phần tử trong goroutine riêng (pipeline); khi
-        người nhận chậm, kênh đầy, vòng đọc của người gửi bị chặn và cửa sổ nhận của transport làm người gửi
-        chậm theo. Hai mảnh đầu có thể cắt ngang JSON meta nên cần \fname{FileHeaderParser} gom theo byte.
-  \item \textbf{Tự kết nối lại và thoát sạch.} Khi \texttt{Done()} đóng mà không do người dùng thoát, client
-        handshake lại với backoff 1, 2, 4\dots{} 30 s. Trong 10 s đầu server có thể còn giữ phiên cũ nên trả
-        \texttt{AUTH\_FAIL} ``đang online''; backoff thử tiếp là vào được. Ban đầu Ctrl+C làm process chết mà
-        không gửi \texttt{CLOSE}, server và những người khác phải chờ 10 s mới thấy user rời đi; thêm bắt tín hiệu
-        ở cả client lẫn server (server đóng \fname{Mux} để gửi \texttt{CLOSE} cho mọi client) thì chỉ còn
-        0,1--0,2 s (\cref{tab:he-thong}).
-  \item \textbf{Tự tìm server trong LAN.} Broadcast ban đầu ghi cứng cổng 9000 và IP do server tự đoán (sai khi
-        máy có nhiều card mạng). \emph{Giải pháp:} server ghi cổng TCP thật; client lấy IP từ địa chỉ nguồn của gói
-        broadcast. Nhiều client trên một máy cùng nghe cổng 9002 thì lần bind thứ hai lỗi, nên socket phải bật
-        \texttt{SO\_REUSEADDR}/\texttt{SO\_REUSEPORT} (mã riêng cho Windows và Unix bằng build tag).
-  \item \textbf{Cờ giả lập mạng ``chạy'' mà không có tác dụng.} \texttt{-jitter} được nhận nhưng không gán vào
-        \fname{LossyConn}; phát hiện khi RTT đo được vẫn 0,1 ms. Bài học giống thử thách~\ref{tt:jitter}: luôn
-        kiểm tra bộ giả lập bằng số đo (RTT, tỉ lệ mất) trước khi tin kết quả.
-  \item \textbf{Web UI không có \fname{net/http}.} Phải tự đọc request line và header, xử lý
-        \texttt{Content-Length} cho cả JSON nhỏ lẫn file hàng trăm MB (thân đọc thẳng ra file tạm, không vào
-        RAM), và trả \texttt{Connection: close} để không phải cài keep-alive. Trình duyệt không được server dội
-        lại tin của chính mình nên JS tự hiển thị khi bấm gửi; nội dung chat là dữ liệu của người khác nên phải
-        escape HTML trước khi chèn vào DOM. Process client chạy nền (\texttt{< /dev/null}) hết stdin là thoát,
-        phải giữ process sống khi còn Web UI.
->>>>>>> 7ff944f596cfe3440ed71bbf6343ebcd727312a6
+        trên socket TCP, nhóm tự xử lý việc đọc request line và từng dòng header, dùng \texttt{io.LimitReader} theo
+        đúng \texttt{Content-Length} cho cả request JSON nhỏ lẫn file upload hàng trăm MB (phần body của file được
+        stream thẳng từ socket ra file tạm trên đĩa chứ không đọc dồn vào RAM), đồng thời trả header
+        \texttt{Connection: close} để đơn giản hóa vòng đời kết nối HTTP. Trên trình duyệt, do server không gửi dội
+        lại tin nhắn về cho chính người gửi nên phía JS tự hiển thị tin ngay khi bấm gửi; toàn bộ nội dung chat từ
+        người khác gửi tới đều đi qua hàm escape ký tự HTML trước khi chèn vào DOM để chống lỗi XSS; ngoài ra khi
+        chạy client ở chế độ nền (\texttt{< /dev/null}), dù luồng đọc \texttt{stdin} chạm \texttt{EOF} ngay lập tức
+        nhưng tiến trình vẫn được giữ hoạt động chừng nào Web UI còn đang chạy.
 \end{enumerate}

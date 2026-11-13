@@ -134,7 +134,7 @@ Từ lúc tầng ứng dụng gọi hàm gửi cho tới khi dữ liệu tới t
         \texttt{bulkCh}. Lúc này lệnh \fname{Write} của goroutine gửi file sẽ tự động bị block lại, tạo cơ chế
         \emph{backpressure} tự nhiên giúp việc truyền một file 200 MB chỉ tốn một lượng RAM nhỏ cố định.
   \item Trong bước \fname{flush()}, chừng nào cửa sổ gửi còn đủ chỗ cho ít nhất một gói, hàm \fname{takeFrames}
-        sẽ bốc các frame ra theo thứ tự ưu tiên nghiêm ngặt: \texttt{retransQ} (frame cần truyền lại) $\to$
+        sẽ lấy các frame ra theo thứ tự ưu tiên nghiêm ngặt: \texttt{retransQ} (frame cần truyền lại) $\to$
         \texttt{urgentQ} (tin nhắn) $\to$ \texttt{bulkQ} (file) cho tới khi đầy gói 1200 byte (\cref{sec:hol}).
   \item Cuối cùng, \fname{sendPacket()} ghép thêm frame ACK đang chờ (nếu có), cấp một số \texttt{packet\_num}
         mới, mã hóa AES-GCM rồi gọi \fname{WriteToUDP}. Bản ghi về gói vừa gửi (gồm thời điểm gửi và danh sách
@@ -183,7 +183,7 @@ nhóm kết hợp ba cách để xác định một gói trong \texttt{unacked} 
         này đặc biệt quan trọng khi \texttt{cwnd} bị thu hẹp xuống chỉ còn 2--3 gói: lúc đó trên đường truyền
         không bao giờ có đủ 3 gói đi sau để kích hoạt điều kiện (1) (xem thử thách~\ref{tt:cubic-cham}).
   \item \textbf{Theo bộ hẹn giờ RTO} (\emph{retransmission timeout}): nếu toàn bộ các gói cuối cửa sổ đều bị rớt
-        khiến không có bất kỳ ACK mới nào quay về, bộ hẹn giờ RTO sẽ nổ sau khoảng thời gian:
+        khiến không có bất kỳ ACK mới nào quay về, bộ hẹn giờ RTO sẽ kích hoạt sau khoảng thời gian:
         \begin{equation}
           \mathit{RTO} = \mathit{SRTT} + \max(4\cdot\mathit{RTTVAR},\ 1\,\text{ms}) + 10\,\text{ms}
           \label{eq:rto}
@@ -225,7 +225,7 @@ mới hoàn toàn (\cref{fig:seq-loss}).
   \label{fig:seq-loss}
 \end{figure}
 
-\paragraph{Cơ chế RTO backoff.} Nếu RTO nổ liên tiếp mà vẫn không nhận được ACK nào (dấu hiệu đường truyền bị
+\paragraph{Cơ chế RTO backoff.} Nếu RTO hết hạn liên tiếp mà vẫn không nhận được ACK nào (dấu hiệu đường truyền bị
 đứt hoàn toàn), thời gian chờ RTO sẽ được nhân đôi sau mỗi lần thử lại (exponential backoff) \cite{rfc6298,rfc9002} cho tới mức trần
 5 giây; ngay khi nhận lại được một ACK hợp lệ thì hệ số nhân này được reset về 1. Lưu ý là việc phát hiện mất gói
 qua điều kiện (1) và (2) chỉ xảy ra khi vẫn có ACK mới báo về (tức mạng vẫn thông), nên hai trường hợp đó không
@@ -237,7 +237,7 @@ phản hồi ACK ngay lập tức, nhóm sử dụng thẳng công thức~\eqref
 
 Thực nghiệm của nhóm cho thấy sự khác biệt rất lớn: khi chạy trên loopback với tỉ lệ rớt gói 10\%, nếu giữ mức sàn
 200 ms thì thông lượng tụt khoảng 6 lần (chỉ đạt 141 KB/s so với 826 KB/s). Nguyên nhân là mỗi khi gói cuối cùng
-của cửa sổ bị rớt, bên gửi phải ngồi đợi đủ 200 ms mới được gửi lại trong khi RTT thực tế trên LAN/loopback chỉ
+của cửa sổ bị rớt, bên gửi phải chờ đủ 200 ms mới được gửi lại trong khi RTT thực tế trên LAN/loopback chỉ
 khoảng 0,4 ms.
 
 Ngược lại, nhóm cũng đã thử bỏ hoàn toàn phần cộng thêm 1 ms và 10 ms ở công thức~\eqref{eq:rto}, tức chỉ lấy
@@ -276,7 +276,7 @@ nhận tổng kích thước của stream rồi đợi tới khi các mảnh b�
 
 \subsection{Điều khiển luồng}
 \label{subsec:dieu-toc}
-Cơ chế điều khiển luồng (flow control) giữ cho bên gửi không bắn dữ liệu nhanh hơn tốc độ đọc của ứng dụng bên
+Cơ chế điều khiển luồng (flow control) giữ cho bên gửi không phát dữ liệu nhanh hơn tốc độ đọc của ứng dụng bên
 nhận. Mỗi kết nối ở phía nhận cấp phát hạn mức bộ đệm tối đa là 1 MB (tính tổng cả những mảnh đã ghép xong đang
 nằm trong \texttt{recvCh} chờ ứng dụng đọc lẫn những mảnh tới sớm còn giữ trong \texttt{pending}). Trong mỗi
 frame ACK gửi về, bên nhận đính kèm trường \texttt{window} là số byte còn trống của hạn mức 1 MB này. Phía gửi chỉ
@@ -296,18 +296,22 @@ có số thứ tự cũ hơn sẽ không được phép ghi đè giá trị \tex
 \subsection{Phát hiện mất kết nối}
 \label{subsec:song-chet}
 Vì UDP là giao thức không kết nối (connectionless), socket UDP sẽ không tự báo lỗi khi máy bên kia rút dây mạng
-hay tắt đột ngột. Do đó nhóm tự quản lý trạng thái sống/chết của kết nối qua các quy tắc sau:
+hay tắt đột ngột. Do đó nhóm tự quản lý trạng thái hoạt động của kết nối qua các quy tắc sau:
 \begin{itemize}
-  \item \textbf{Keep-alive:} không gửi gì trong 2 s thì gửi PING. PING cần ACK, nên hai bên luôn biết nhau còn sống.
-  \item \textbf{Idle timeout:} không nhận được gói hợp lệ nào trong 10 s thì coi bên kia đã chết, đóng kết nối,
-        báo cho ứng dụng qua \fname{Done()}.
-  \item \textbf{CLOSE:} đóng chủ động thì gửi CLOSE để bên kia biết ngay thay vì đợi 10 s. Kết nối đóng ngay
-        nên không chờ ACK để gửi lại; thay vào đó CLOSE được gửi 3 bản liên tiếp, mỗi bản một
-        \texttt{packet\_num} mới (ở loss 10\% xác suất mất cả 3 là 0,1\%). Nếu mất hết thì bên kia vẫn tự đóng
-        sau idle timeout.
-  \item \textbf{PING đầu tiên:} server chỉ biết địa chỉ UDP của client khi nhận được gói đầu tiên của client.
-        Client gửi lại PING đầu sau 200, 400, 800 ms\dots{} (tối đa 2 s) tới khi nghe được server
-        (thử thách~\ref{tt:ping-dau}).
-  \item \textbf{Gói hỏng:} sai magic/version, \texttt{conn\_id} lạ, frame cụt, type lạ, giải mã thất bại: bỏ gói,
-        không panic, không đóng kết nối. Kẻ gửi rác không thể làm ngắt kết nối của người khác.
+  \item \textbf{Keep-alive:} nếu trong 2 giây không có dữ liệu nào gửi đi, bên gửi sẽ tự động phát một frame PING.
+        Vì PING là frame yêu cầu phản hồi ACK, cả hai đầu kết nối luôn biết đối phương vẫn đang hoạt động.
+  \item \textbf{Idle timeout:} nếu quá 10 giây liên tiếp không nhận được bất kỳ gói hợp lệ nào, kết nối coi như
+        phía bên kia đã ngừng phản hồi, tự động đóng lại và thông báo cho tầng ứng dụng qua channel \fname{Done()}.
+  \item \textbf{CLOSE:} khi một bên chủ động đóng kết nối, nó sẽ gửi frame CLOSE để bên kia giải phóng tài nguyên
+        ngay thay vì phải chờ hết 10 giây timeout. Do kết nối đóng ngay lập tức và không còn chờ ACK để truyền lại,
+        frame CLOSE được phát 3 bản liên tiếp trong 3 gói có \texttt{packet\_num} mới (với mức rớt gói 10\%, xác
+        suất mất cả 3 gói chỉ là 0,1\%). Trường hợp cả 3 gói đều bị rớt thì đầu bên kia vẫn tự động đóng kết nối
+        sau khoảng idle timeout.
+  \item \textbf{PING đầu tiên:} phía server chỉ học được địa chỉ UDP của client khi nhận được gói UDP đầu tiên từ
+        client gửi lên. Do đó, ngay sau khi mở kết nối, client sẽ chủ động gửi lại gói PING đầu tiên theo chu kỳ
+        200, 400, 800 ms\dots{} (tối đa 2 giây) cho tới khi nhận được gói phản hồi đầu tiên từ server
+        (xem thử thách~\ref{tt:ping-dau}).
+  \item \textbf{Xử lý gói hỏng:} các gói UDP bị sai magic/version, mang \texttt{conn\_id} lạ, chứa frame bị cắt
+        cụt, có mã \texttt{type} không hợp lệ hoặc giải mã thất bại đều bị âm thầm loại bỏ mà không gây panic hay
+        làm đóng kết nối hiện tại. Nhờ vậy, kẻ xấu gửi gói rác không thể làm ngắt kết nối của người dùng khác.
 \end{itemize}
