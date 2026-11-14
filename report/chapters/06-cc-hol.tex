@@ -146,7 +146,7 @@ Nhìn vào hai đồ thị trên, có thể thấy rõ các giai đoạn hoạt 
 \subsection{Giới hạn của CUBIC khi mất gói ngẫu nhiên}
 \label{subsec:cubic-gioi-han}
 Bên cạnh ưu điểm tận dụng tốt băng thông khi mạng nghẽn thật, quá trình đo đạc cũng giúp nhóm thấy rõ điểm yếu cố
-hữu của CUBIC (cũng như họ thuật toán loss-based nói chung) khi gặp môi trường rớt gói ngẫu nhiên. Vì thuật toán
+hữu của CUBIC khi gặp môi trường rớt gói ngẫu nhiên. Vì thuật toán
 quy mọi sự kiện rớt gói thành tín hiệu tràn bộ đệm mạng, nên khi bật giả lập rớt gói ngẫu nhiên 10\%
 (\texttt{-loss 0.1}, mô phỏng sóng Wi-Fi yếu) dù đường truyền thực tế đang rất thông thoáng, \texttt{cwnd} vẫn bị
 nhân $0{,}7$ liên tục và bị ép sát xuống đáy 2 gói. Hiện tượng này phù hợp với công thức Mathis \cite{mathis},

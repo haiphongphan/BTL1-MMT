@@ -5,7 +5,7 @@
 | 9000 | TCP | Handshake, trao khóa, đăng nhập (đóng sau khi xong) |
 | 9001 | UDP | Toàn bộ dữ liệu: message, file, ACK, heartbeat |
 | 9002 | UDP broadcast | Server quảng bá `"COLLAB_SERVER <ip> <tcp_port> <udp_port>"` mỗi 2s; client `-server auto` nghe cổng này để tự tìm server (lấy IP từ địa chỉ nguồn của gói) |
-| 8080+ | TCP (HTTP tự viết) | Web UI của từng client, chỉ bind `127.0.0.1` |
+| 8080+ | TCP (HTTP tự viết) | Web UI của từng client (trang đăng nhập / đăng ký + ứng dụng), chỉ bind `127.0.0.1` |
 
 ### 3.2 Handshake TCP (mỗi message: `[4 byte độ dài][JSON]`)
 
@@ -15,11 +15,25 @@ Client                                                                          
   |<-----------------------------KEYX {server_pub, conn_id, udp_port}-----------------------|
   |   CẢ HAI: shared = ECDH; k_tcp = SHA256(shared‖"tcp"); k_udp = SHA256(shared‖"udp")     |
   |                                                                                         |        
-  |---------------------AUTH {nonce, sealed(AES-GCM,k_tcp, {user,pass})}------------------->|  kiểm tra users.json
+  |-------------AUTH | REGISTER {nonce, sealed(AES-GCM,k_tcp, {user,pass})}--------------->|  kiểm tra users.json
   |<-------------------AUTH_OK {users:[...]}  hoặc AUTH_FAIL{reason}------------------------|  tạo transport.Conn(conn_id, k_udp)
   |   ĐÓNG TCP                                                                              |
   |-----------------------UDP: gói đầu tiên (PING) mang conn_id---------------------------->|  server ghi lại IP:port UDP của client
 ```
+
+**Đăng ký** dùng đúng handshake trên, chỉ đổi `type` của message thứ 3 thành `"REGISTER"` (cùng định dạng, mật khẩu
+vẫn mã hóa bằng `k_tcp`). Server kiểm tra rồi tạo tài khoản và **đăng nhập luôn**, trả `AUTH_OK` như đăng nhập thường.
+
+| Kiểm tra | `AUTH_FAIL.reason` |
+|---|---|
+| Tên 3–20 ký tự, chỉ `A–Z a–z 0–9 _` | `Tên đăng nhập phải dài 3–20 ký tự, chỉ gồm chữ không dấu, số và dấu _` |
+| Mật khẩu 6–64 byte | `Mật khẩu phải dài 6–64 ký tự` |
+| Tên chưa có trong `users.json` | `Tên đăng nhập đã tồn tại` |
+| Ghi `users.json` thành công (file tạm rồi rename) | `Server không lưu được tài khoản, thử lại sau` |
+
+Tài khoản lưu dạng `{"salt": hex 8 byte, "hash": hex(sha256(salt ‖ password))}`. Khi **đăng nhập**, user lạ và sai
+mật khẩu trả cùng lý do `Tài khoản hoặc mật khẩu không chính xác`; `type` khác `AUTH`/`REGISTER` bị từ chối.
+Kết nối lại tự động luôn dùng `AUTH`.
 
 ### 3.3 Gói UDP
 
@@ -161,7 +175,9 @@ tin #2 có thể tới trước tin #1. Để giữ đúng thứ tự mà vẫn 
 
 ### 3.6 State diagram
 
-**Client** (`client.Status().State`, hiện trên thanh trạng thái Web UI):
+**Client** (`client.Status().State`, hiện trên thanh trạng thái Web UI). Trước sơ đồ dưới còn trạng thái
+**LOGGED_OUT** (`logged_in = false`): Web UI hiện trang đăng nhập / đăng ký; bấm Đăng nhập hoặc Đăng ký thì đi vào
+DISCOVERING (server `auto`) hoặc HANDSHAKING. Đăng xuất từ CONNECTED hoặc RECONNECTING quay về LOGGED_OUT.
 
 ```
                  -server auto
@@ -177,7 +193,8 @@ tin #2 có thể tới trước tin #1. Để giữ đúng thứ tự mà vẫn 
                                      └──────────────────────────────┘
 ```
 
-Lần đăng nhập đầu thất bại thì client thoát với thông báo lỗi; chỉ khi đã từng `CONNECTED` mới vào `RECONNECTING`.
+Lần đăng nhập đầu thất bại: chạy bằng cờ `-user` thì client thoát với thông báo lỗi; đăng nhập trên Web UI thì quay về
+trang đăng nhập và hiện lý do. Chỉ khi đã từng `CONNECTED` mới vào `RECONNECTING`.
 
 **Session phía server:**
 

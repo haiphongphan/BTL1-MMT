@@ -36,6 +36,13 @@ func (l *EventLog) Add(eventType string, data any) {
 	}
 }
 
+// Last trả về seq của event mới nhất (0 nếu chưa có).
+func (l *EventLog) Last() int64 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.seq
+}
+
 // Since trả về các event có Seq > s (dùng cho GET /api/events?since=s).
 func (l *EventLog) Since(s int64) []Event {
 	l.mu.Lock()

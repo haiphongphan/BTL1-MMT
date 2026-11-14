@@ -2,6 +2,7 @@ package webui
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net/url"
@@ -9,6 +10,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/phongphanhai06/go-collab/internal/client"
 )
 
 // maxJSONBody: giới hạn thân request JSON (tin chat), file đi qua /api/upload riêng.
@@ -18,7 +21,10 @@ const maxJSONBody = 64 << 10
 //
 //	GET  /, /app.js, /style.css      file tĩnh
 //	GET  /api/events?since=N          các event có seq > N (trình duyệt poll mỗi 400 ms)
-//	GET  /api/status                  trạng thái kết nối, RTT, cwnd, mất gói, user online + địa chỉ
+//	GET  /api/status                  đã đăng nhập chưa, trạng thái kết nối, RTT, cwnd, mất gói, user online
+//	POST /api/login    {server, user, pass}   đăng nhập
+//	POST /api/register {server, user, pass}   đăng ký tài khoản mới rồi đăng nhập luôn
+//	POST /api/logout                  đăng xuất, Web UI quay về trang đăng nhập
 //	POST /api/send   {to, text}       chat (to rỗng) hoặc DM
 //	POST /api/upload?to=&name=        thân là nội dung file thô (không multipart)
 func (s *Server) route(req *Request) Response {
@@ -34,6 +40,16 @@ func (s *Server) route(req *Request) Response {
 		return s.apiEvents(req)
 	case req.Path == "/api/status":
 		return jsonResp(200, s.c.Status())
+	case req.Path == "/api/login":
+		return s.apiLogin(req, false)
+	case req.Path == "/api/register":
+		return s.apiLogin(req, true)
+	case req.Path == "/api/logout":
+		if req.Method != "POST" {
+			return jsonErr(405, "POST only")
+		}
+		s.c.Logout()
+		return jsonResp(200, map[string]bool{"ok": true})
 	case req.Path == "/api/send":
 		return s.apiSend(req)
 	case req.Path == "/api/upload":
@@ -70,6 +86,39 @@ func (s *Server) apiEvents(req *Request) Response {
 	q, _ := url.ParseQuery(req.RawQuery)
 	since, _ := strconv.ParseInt(q.Get("since"), 10, 64)
 	return jsonResp(200, s.c.Events.Since(since))
+}
+
+// apiLogin: POST /api/login hoặc /api/register {server, user, pass}. Chặn tới khi handshake xong (tối đa
+// khoảng 5 s, thêm 5 s nếu server = "auto") rồi trả {ok} hoặc {error} để trang đăng nhập hiện lỗi.
+// Tên và mật khẩu được server kiểm tra; ở đây chỉ chặn ô trống.
+func (s *Server) apiLogin(req *Request, register bool) Response {
+	if req.Method != "POST" {
+		return jsonErr(405, "POST only")
+	}
+	if req.ContentLength > maxJSONBody {
+		return jsonErr(400, "body quá lớn")
+	}
+	var in struct{ Server, User, Pass string }
+	if err := json.NewDecoder(req.Body).Decode(&in); err != nil {
+		return jsonErr(400, "JSON hỏng: "+err.Error())
+	}
+	in.Server, in.User = strings.TrimSpace(in.Server), strings.TrimSpace(in.User)
+	if in.Server == "" || in.User == "" || in.Pass == "" {
+		return jsonErr(400, "Cần nhập đủ server, tên đăng nhập và mật khẩu")
+	}
+
+	err := s.c.Login(in.Server, in.User, in.Pass, register)
+	var ae *client.AuthError
+	switch {
+	case err == nil:
+		return jsonResp(200, map[string]bool{"ok": true})
+	case errors.As(err, &ae):
+		return jsonErr(401, ae.Reason) // sai mật khẩu, tên đã tồn tại, đang online ở máy khác...
+	case errors.Is(err, client.ErrLoggedIn), errors.Is(err, client.ErrLoginBusy):
+		return jsonErr(409, err.Error())
+	default:
+		return jsonErr(502, "Không kết nối được server: "+err.Error())
+	}
 }
 
 // apiSend: POST /api/send {to, text}; to rỗng = chat chung.

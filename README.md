@@ -3,7 +3,7 @@
 Bài tập lớn 1, môn Mạng máy tính (CO3093). Chat nhóm, nhắn tin riêng và gửi file giữa nhiều client qua một server, viết hoàn toàn bằng **thư viện chuẩn của Go**, không dùng framework.
 
 - **Server**: handshake và đăng nhập qua TCP (`:9000`); toàn bộ dữ liệu đi qua **UDP tin cậy tự viết** (`:9001`) với SACK, RTO, nhiều stream độc lập (không Head-of-Line blocking), congestion control CUBIC, mã hóa AES-256-GCM với khóa trao đổi bằng X25519.
-- **Client**: một process trên máy người dùng. Giao diện web do **HTTP server tự viết trên raw TCP** phục vụ tại `127.0.0.1:808x`, HTML/JS thuần; ngoài ra có CLI trong terminal.
+- **Client**: một process trên máy người dùng. Giao diện web do **HTTP server tự viết trên raw TCP** phục vụ tại `127.0.0.1:808x`, HTML/JS thuần, có trang **đăng nhập / đăng ký**; ngoài ra có CLI trong terminal.
 
 Tài liệu: [`docs/protocol.md`](docs/protocol.md) (đặc tả giao thức), [`docs/reliability.md`](docs/reliability.md) (thiết kế tin cậy, đồ thị cwnd), [`docs/code-walkthrough.md`](docs/code-walkthrough.md) (đọc hiểu code từ A đến Z), [`report/`](report/) (báo cáo LaTeX).
 
@@ -27,26 +27,34 @@ go build -o bin/client ./cmd/client
 ./bin/server
 
 # Terminal 2, 3 — hai client, mỗi client một cổng web riêng
-./bin/client -user alice -pass 123456 -web 127.0.0.1:8081
-./bin/client -user bob   -pass 123456 -web 127.0.0.1:8082
+./bin/client -web 127.0.0.1:8081
+./bin/client -web 127.0.0.1:8082
 ```
 
-Mở http://127.0.0.1:8081 và http://127.0.0.1:8082:
+Mở http://127.0.0.1:8081 và http://127.0.0.1:8082. Trang đầu tiên là **đăng nhập / đăng ký**:
+
+- Tab **Đăng nhập**: ô Server điền sẵn `127.0.0.1:9000` (giá trị cờ `-server`; gõ `auto` để tự tìm server trong LAN), nhập tài khoản ở mục 5.
+- Tab **Đăng ký**: tạo tài khoản mới rồi vào luôn. Tên 3–20 ký tự gồm chữ không dấu, số, dấu `_`; mật khẩu 6–64 ký tự, nhập lại 2 lần. Server ghi tài khoản vào `users.json`.
+- Sai mật khẩu, tên đã tồn tại hay tài khoản đang online ở máy khác đều hiện lý do ngay dưới form.
+
+Muốn bỏ qua trang đăng nhập (CLI, bot, test tải) thì truyền tài khoản bằng cờ: `./bin/client -user alice -pass 123456 -web 127.0.0.1:8081`.
+
+Sau khi đăng nhập:
 
 - Cột trái: danh sách người đang online kèm **IP:port** mà server đang dùng để nói chuyện với họ; **bấm tên** để mở tab chat riêng.
 - Khung giữa: tab **Chung** và các tab DM; nhập tin rồi Enter.
 - Nút **📎**: gửi file cho người trong tab đang mở (tab Chung = gửi cho mọi người). Thanh tiến trình hiện ở cả bên gửi và bên nhận; file nhận nằm trong `downloads/` của thư mục chạy client, được kiểm tra SHA-256 trước khi báo xong.
-- Thanh trên cùng: 🟢 connected / 🟡 reconnecting / 🔴 disconnected, địa chỉ server, RTT, cwnd, in-flight, % gói mất.
+- Thanh trên cùng: 🟢 connected / 🟡 reconnecting / 🔴 disconnected, địa chỉ server, RTT, cwnd, in-flight, % gói mất, nút **Đăng xuất** (quay về trang đăng nhập, có thể vào bằng tài khoản khác mà không cần chạy lại client).
 
-CLI trong terminal của client: `/msg <text>`, `/dm <user> <text>`, `/file <đường-dẫn> [user]`, `/users`, `/quit`. Gõ thẳng một dòng = `/msg`. Ctrl+C thoát và báo server ngay.
+CLI trong terminal của client: `/msg <text>`, `/dm <user> <text>`, `/file <đường-dẫn> [user]`, `/users`, `/quit`, `/login <user> <pass>`, `/register <user> <pass>`, `/logout`. Gõ thẳng một dòng = `/msg`. Ctrl+C thoát và báo server ngay.
 
 ## 4. Chạy nhiều máy trong LAN
 
-Trên máy server: `./bin/server` (log in ra IP:port của từng client khi họ kết nối). Trên máy khác, chọn một trong hai:
+Trên máy server: `./bin/server` (log in ra IP:port của từng client khi họ kết nối). Trên máy khác chạy `./bin/client` rồi mở http://127.0.0.1:8081; ở trang đăng nhập, ô Server nhập `auto` (tự tìm server qua broadcast UDP :9002, tối đa 5 s) hoặc `192.168.1.10:9000` (khi mạng chặn broadcast). Dùng cờ cũng được:
 
 ```bash
-./bin/client -server auto -user alice -pass 123456            # tự tìm server qua broadcast UDP :9002 (tối đa 5 s)
-./bin/client -server 192.168.1.10:9000 -user alice -pass 123456  # chỉ định địa chỉ, khi mạng chặn broadcast
+./bin/client -server auto -user alice -pass 123456
+./bin/client -server 192.168.1.10:9000 -user alice -pass 123456
 ```
 
 Mạng có firewall thì mở thêm `9002/UDP` chiều vào trên máy client để dùng `-server auto`. Web UI luôn chỉ lắng nghe trên `127.0.0.1` của máy chạy client.
@@ -55,7 +63,9 @@ Mạng có firewall thì mở thêm `9002/UDP` chiều vào trên máy client đ
 
 `users.json` lưu `sha256(salt ‖ password)` với salt ngẫu nhiên cho từng user. Tài khoản demo có sẵn, mật khẩu đều là `123456`: `alice`, `bob`, `carol`, `phong`, `hai`, và `user1` … `user20` (dùng cho test tải). Riêng `phan` có mật khẩu `654321`.
 
-Thêm hoặc đặt lại mật khẩu:
+Tạo tài khoản mới: tab **Đăng ký** trên Web UI, lệnh `/register <user> <pass>` trong CLI, hoặc cờ `-register` (`./bin/client -register -user dave -pass secret1`). Server ghi ngay vào `users.json` (ghi file tạm rồi đổi tên, không làm hỏng file nếu tắt giữa chừng).
+
+Thêm hoặc đặt lại mật khẩu từ dòng lệnh (khi server đang tắt):
 
 ```bash
 go run ./cmd/mkusers -pass matkhau dave eve     # thêm/ghi đè user dave, eve
@@ -80,8 +90,9 @@ go run ./cmd/mkusers -n 30                      # tạo user1..user30, mật kh�
 
 | Cờ | Mặc định | Ý nghĩa |
 |---|---|---|
-| `-server` | `127.0.0.1:9000` | Địa chỉ TCP của server, hoặc `auto` để tự tìm server trong LAN |
-| `-user`, `-pass` | | Tài khoản |
+| `-server` | `127.0.0.1:9000` | Địa chỉ TCP của server, hoặc `auto` để tự tìm server trong LAN. Không có `-user` thì đây là giá trị điền sẵn ở trang đăng nhập |
+| `-user`, `-pass` | | Tài khoản; bỏ trống thì đăng nhập / đăng ký trên Web UI. Bắt buộc khi `-web ""` hoặc `-bot` |
+| `-register` | `false` | Đăng ký `-user`/`-pass` như tài khoản mới rồi đăng nhập luôn |
 | `-web` | `127.0.0.1:8081` | Địa chỉ Web UI (`""` để tắt) |
 | `-cc`, `-cclog`, `-loss`, `-jitter` | | Như server |
 | `-bot` | `false` | Tự gửi chat mỗi 1–3 s (test tải) |
@@ -116,7 +127,7 @@ Quan sát mã hóa bằng Wireshark với bộ lọc `tcp.port == 9000 || udp.po
 
 ## 8. Giao thức và transport (tóm tắt)
 
-Dữ liệu (chat, DM, file) đi qua **một giao thức tin cậy tự viết trên UDP**; TCP chỉ dùng cho handshake (ECDH X25519 + đăng nhập).
+Dữ liệu (chat, DM, file) đi qua **một giao thức tin cậy tự viết trên UDP**; TCP chỉ dùng cho handshake (ECDH X25519 + đăng nhập hoặc đăng ký: message `AUTH` / `REGISTER` mang `{user, pass}` đã mã hóa AES-GCM).
 
 - Gói ≤ 1200 byte: header 12 byte gửi rõ (là AAD) + frames mã hóa **AES-256-GCM**. Nonce = `conn_id ‖ packet_num ‖ chiều`, không bao giờ lặp.
 - Frame: `STREAM` (stream_id, offset, FIN), `ACK` (cửa sổ nhận + tối đa 8 SACK range), `PING`, `CLOSE`.

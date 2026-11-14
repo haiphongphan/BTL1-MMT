@@ -48,7 +48,7 @@ Vì vậy, nhóm viết lớp bọc \fname{LossyConn} nằm ngay trên socket UD
 Ngoài việc dùng trong các file test, cả hai chương trình \fname{server} và \fname{client} đều hỗ trợ cờ dòng lệnh
 \texttt{-loss} (bọc \fname{LossyConn} quanh socket thật) để tiện demo trực tiếp khả năng chịu lỗi khi vấn đáp.
 
-\subsection{Test đơn vị và tích hợp của tầng giao thức và transport}
+\subsection{Unit Test và tích hợp của tầng giao thức và transport}
 Hai package \fname{internal/protocol} (20 test) và \fname{internal/transport} (45 test) có tổng cộng 65 test tự
 động, thời gian chạy toàn bộ khoảng 15 giây. Các nhóm kịch bản kiểm tra chính được tổng hợp trong
 \cref{tab:unit-test}.
@@ -124,7 +124,7 @@ còn 0,2\% (trước khi nhóm sửa lại hàng đợi FIFO cho bộ giả lậ
 thách~\ref{tt:jitter}). Kết quả đo độ trễ tin nhắn chat khi truyền song song với file lớn đã được trình bày ở
 \cref{tab:hol}.
 
-\subsection{Test tích hợp và hệ thống của tầng ứng dụng}
+\subsection{Integration Test và hệ thống của tầng ứng dụng}
 \label{subsec:test-he-thong}
 Ở tầng ứng dụng, phía server có bộ 7 test tích hợp trong \fname{internal/server/router\_test.go} ghép trực tiếp
 logic định tuyến của server thật với kết nối trong bộ nhớ (\fname{transport.FakePair}), bao gồm:
@@ -191,6 +191,11 @@ hai phía đều được cấu hình mức rớt gói \texttt{-loss 0.1} (trừ
   UDP không đọc được (\cref{sec:bao-mat}) \\
   11 & Tự tìm server: 3 client trên cùng máy chạy \texttt{-server auto} đồng thời & Cả 3 tìm thấy server sau
   $\approx$ 40 ms, đúng cổng TCP server đang dùng (không phải giá trị mặc định) \\
+  12 & Trang đăng nhập / đăng ký trên Chrome: đăng ký, nhận chat, tải lại trang, đăng xuất, đăng nhập lại &
+  Mật khẩu nhập lại không khớp và tên đã tồn tại hiện lỗi dưới form; đăng ký đúng thì vào thẳng phòng chat, server
+  ghi tài khoản vào \texttt{users.json}; tải lại trang vẫn thấy tin của phiên; đăng xuất về trang đăng nhập,
+  người khác thấy danh sách cập nhật ngay; sai mật khẩu bị từ chối; đăng nhập lại thì giao diện trống, không lộ
+  tin của phiên trước; không có lỗi JavaScript. Tắt rồi bật lại server: client đăng nhập trên web tự kết nối lại \\
   \bottomrule
 \end{longtable}
 

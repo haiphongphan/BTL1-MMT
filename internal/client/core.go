@@ -16,31 +16,52 @@ import (
 	"github.com/phongphanhai06/go-collab/internal/transport"
 )
 
-// Client là một người dùng đã (hoặc đang) đăng nhập. An toàn cho nhiều goroutine: CLI, Web UI và
-// listenLoop cùng dùng một Client.
+// Client là process phía người dùng. Một Client có thể đăng nhập, đăng xuất rồi đăng nhập lại bằng
+// tài khoản khác (trang đăng nhập của Web UI). An toàn cho nhiều goroutine: CLI, Web UI và listenLoop
+// cùng dùng một Client.
 type Client struct {
-	User        string
 	Events      *EventLog     // mọi sự kiện cho UI, có số thứ tự tăng dần
 	DownloadDir string        // thư mục lưu file nhận được
 	Jitter      time.Duration // giả lập trễ ngẫu nhiên chiều gửi (test)
+	Loss        float64       // giả lập mất gói chiều gửi (0.1 = 10%); đặt trước khi Login
 
-	mu      sync.Mutex // bảo vệ mọi field bên dưới
-	online  []string
-	addrs   map[string]string // user → "ip:port" do server báo kèm tin "users"
-	ep      transport.Endpoint
-	closing bool
-	state   string
-	addr    string // lưu lại để reconnect
-	pass    string
-	loss    float64
-	seq     uint64 // Seq của tin gửi đi trên kết nối hiện tại (1, 2, 3...); về 0 khi có kết nối mới
+	mu       sync.Mutex // bảo vệ mọi field bên dưới
+	user     string
+	loggedIn bool // đã đăng nhập thành công và chưa đăng xuất (kể cả lúc đang kết nối lại)
+	authing  bool // đang chạy Login, chặn Login thứ hai chạy song song
+	// gen tăng mỗi lần Login hoặc Logout. listenLoop và reconnectLoop nhớ gen lúc chúng bắt đầu; gen đổi
+	// nghĩa là phiên đó đã hết, chúng phải dừng thay vì kết nối lại bằng tài khoản cũ.
+	gen      uint64
+	loginSeq int64 // seq của EventLog lúc bắt đầu phiên đăng nhập này
+	online   []string
+	addrs    map[string]string // user → "ip:port" do server báo kèm tin "users"
+	ep       transport.Endpoint
+	closing  bool
+	state    string
+	addr     string // địa chỉ server, lưu lại để reconnect
+	pass     string
+	seq      uint64 // Seq của tin gửi đi trên kết nối hiện tại (1, 2, 3...); về 0 khi có kết nối mới
 }
+
+// AuthError là lý do server trả trong AUTH_FAIL (sai mật khẩu, tên đã tồn tại...), để UI hiện nguyên văn.
+type AuthError struct{ Reason string }
+
+func (e *AuthError) Error() string { return "auth failed: " + e.Reason }
+
+// Các lỗi của Login/Logout.
+var (
+	ErrLoggedIn  = errors.New("client: đã đăng nhập, hãy đăng xuất trước")
+	ErrLoginBusy = errors.New("client: đang đăng nhập, chờ chút")
+	errStale     = errors.New("client: phiên đăng nhập đã kết thúc")
+)
 
 // Status là ảnh chụp trạng thái cho thanh trạng thái của Web UI (/api/status).
 type Status struct {
 	User     string            `json:"user"`
-	State    string            `json:"state"`  // connected | reconnecting | disconnected
-	Server   string            `json:"server"` // địa chỉ TCP của server
+	LoggedIn bool              `json:"logged_in"` // false: Web UI hiện trang đăng nhập
+	Since    int64             `json:"since"`     // Web UI đọc event từ seq này: không hiện tin của phiên trước
+	State    string            `json:"state"`     // connected | reconnecting | disconnected
+	Server   string            `json:"server"`    // địa chỉ TCP của server (trước khi đăng nhập: giá trị cờ -server)
 	Online   []string          `json:"online"`
 	Addrs    map[string]string `json:"addrs"`
 	RTTms    float64           `json:"rtt_ms"`
@@ -51,13 +72,28 @@ type Status struct {
 	LossPct  float64           `json:"loss_pct"`
 }
 
-// NewClient tạo client chưa kết nối; gọi Connect để đăng nhập.
+// NewClient tạo client chưa kết nối. username có thể rỗng nếu người dùng sẽ đăng nhập qua Web UI;
+// gọi Connect (dùng username này) hoặc Login để đăng nhập.
 func NewClient(username string) *Client {
 	return &Client{
-		User:        username,
+		user:        username,
 		Events:      NewEventLog(),
 		DownloadDir: "downloads",
 	}
+}
+
+// Username trả về tên đang đăng nhập (hoặc tên truyền vào NewClient nếu chưa đăng nhập).
+func (c *Client) Username() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.user
+}
+
+// SetServer đặt địa chỉ server mặc định, Web UI điền sẵn vào ô Server của trang đăng nhập.
+func (c *Client) SetServer(addr string) {
+	c.mu.Lock()
+	c.addr = addr
+	c.mu.Unlock()
 }
 
 // OnlineUsers trả về bản sao danh sách user đang online.
@@ -92,8 +128,8 @@ func (c *Client) setState(st string) {
 // Status gom trạng thái kết nối và số liệu của transport (RTT, cwnd, in-flight, tỉ lệ mất gói).
 func (c *Client) Status() Status {
 	c.mu.Lock()
-	st := Status{User: c.User, State: c.state, Server: c.addr, Online: append([]string(nil), c.online...),
-		Addrs: make(map[string]string, len(c.addrs))}
+	st := Status{User: c.user, LoggedIn: c.loggedIn, Since: c.loginSeq, State: c.state, Server: c.addr,
+		Online: append([]string(nil), c.online...), Addrs: make(map[string]string, len(c.addrs))}
 	for k, v := range c.addrs {
 		st.Addrs[k] = v
 	}
@@ -113,28 +149,96 @@ func (c *Client) Status() Status {
 	return st
 }
 
-func (c *Client) isClosing() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.closing
+// Connect đăng nhập bằng username đã truyền vào NewClient (dùng cho cờ -user và trong test).
+// loss > 0 thì giả lập mất gói chiều gửi.
+func (c *Client) Connect(serverTCPAddr, password string, loss float64) error {
+	c.Loss = loss
+	return c.Login(serverTCPAddr, c.Username(), password, false)
 }
 
-// Connect đăng nhập lần đầu (TCP handshake rồi mở kênh UDP). Địa chỉ và mật khẩu được giữ lại để tự
-// kết nối lại khi mất mạng. loss > 0 thì giả lập mất gói chiều gửi.
-func (c *Client) Connect(serverTCPAddr, password string, loss float64) error {
+// Login đăng nhập (register = false) hoặc đăng ký tài khoản mới rồi đăng nhập luôn (register = true):
+// TCP handshake rồi mở kênh UDP. serverTCPAddr = "auto" thì tự tìm server trong LAN trước. Địa chỉ và
+// mật khẩu được giữ trong RAM để tự kết nối lại khi mất mạng. Lỗi từ server có kiểu *AuthError.
+func (c *Client) Login(serverTCPAddr, user, password string, register bool) error {
 	c.mu.Lock()
-	c.addr, c.pass, c.loss = serverTCPAddr, password, loss
+	switch {
+	case c.authing:
+		c.mu.Unlock()
+		return ErrLoginBusy
+	case c.loggedIn:
+		c.mu.Unlock()
+		return ErrLoggedIn
+	}
+	c.authing = true
+	c.gen++
+	gen := c.gen
+	c.closing = false
 	c.mu.Unlock()
-	return c.dial()
+
+	err := c.login(gen, serverTCPAddr, user, password, register)
+
+	c.mu.Lock()
+	c.authing = false
+	if err == nil {
+		c.loggedIn = true
+	}
+	c.mu.Unlock()
+	return err
+}
+
+// login là phần việc của Login sau khi đã giữ chỗ (authing = true).
+func (c *Client) login(gen uint64, addr, user, password string, register bool) error {
+	if addr == "auto" {
+		c.Events.Add("status", "đang tìm server trong LAN (UDP :9002)...")
+		found, err := Discover(5 * time.Second)
+		if err != nil {
+			return err
+		}
+		c.Events.Add("status", "tìm thấy server "+found)
+		addr = found
+	}
+	if _, _, err := net.SplitHostPort(addr); err != nil {
+		return fmt.Errorf("địa chỉ server phải có dạng ip:port: %w", err)
+	}
+
+	c.mu.Lock()
+	c.user, c.addr, c.pass = user, addr, password
+	c.online, c.addrs = nil, nil
+	c.loginSeq = c.Events.Last() // Web UI chỉ hiện event từ đây trở đi
+	c.mu.Unlock()
+	return c.dial(gen, register)
+}
+
+// Logout đăng xuất: đóng kết nối (gửi CLOSE để server báo mọi người ngay), dừng kết nối lại và quên mật
+// khẩu. Sau đó có thể Login lại, kể cả bằng tài khoản khác.
+func (c *Client) Logout() {
+	c.mu.Lock()
+	wasIn := c.loggedIn
+	c.closing = true
+	c.loggedIn = false
+	c.gen++ // reconnectLoop / listenLoop của phiên cũ thấy gen đổi và tự dừng
+	ep := c.ep
+	c.ep = nil
+	c.pass = ""
+	c.online, c.addrs = nil, nil
+	c.mu.Unlock()
+	if ep != nil {
+		ep.Close()
+	}
+	if wasIn {
+		c.setState("disconnected")
+	}
 }
 
 // dial: handshake TCP lấy conn_id và k_udp, rồi Dial transport tới cổng UDP server báo trong KEYX.
-func (c *Client) dial() error {
+// register = true chỉ dùng ở lần đầu (đăng ký); kết nối lại luôn là AUTH.
+func (c *Client) dial(gen uint64, register bool) error {
 	c.mu.Lock()
-	addr, pass, loss := c.addr, c.pass, c.loss
+	addr, user, pass := c.addr, c.user, c.pass
 	c.mu.Unlock()
+	loss := c.Loss
 
-	keyx, kUDP, err := c.ConnectTCPAndAuth(addr, pass)
+	keyx, kUDP, err := c.handshake(addr, user, pass, register)
 	if err != nil {
 		return err
 	}
@@ -161,25 +265,20 @@ func (c *Client) dial() error {
 		sock.Close()
 		return err
 	}
-	c.AttachEndpoint(conn)
+	if !c.attach(gen, conn) { // người dùng đã đăng xuất trong lúc đang kết nối
+		conn.Close()
+		return errStale
+	}
 	c.setState("connected")
 	return nil
 }
 
-// Close thoát hẳn: gửi CLOSE cho server (server báo mọi người ngay) và không kết nối lại nữa.
-func (c *Client) Close() {
-	c.mu.Lock()
-	c.closing = true
-	ep := c.ep
-	c.mu.Unlock()
-	if ep != nil {
-		ep.Close()
-	}
-}
+// Close thoát hẳn (Ctrl+C, /quit): giống Logout.
+func (c *Client) Close() { c.Logout() }
 
-// ConnectTCPAndAuth chạy phía client của handshake: HELLO → KEYX → AUTH (mật khẩu mã hóa bằng k_tcp)
-// → AUTH_OK/AUTH_FAIL. Trả về KEYX (conn_id, cổng UDP) và k_udp để mở kênh UDP.
-func (c *Client) ConnectTCPAndAuth(serverTCPAddr, password string) (*protocol.KeyX, [32]byte, error) {
+// handshake chạy phía client của handshake: HELLO → KEYX → AUTH hoặc REGISTER (mật khẩu mã hóa bằng
+// k_tcp) → AUTH_OK/AUTH_FAIL. Trả về KEYX (conn_id, cổng UDP) và k_udp để mở kênh UDP.
+func (c *Client) handshake(serverTCPAddr, user, password string, register bool) (*protocol.KeyX, [32]byte, error) {
 	conn, err := net.DialTimeout("tcp", serverTCPAddr, 5*time.Second)
 	if err != nil {
 		return nil, [32]byte{}, err
@@ -203,11 +302,15 @@ func (c *Client) ConnectTCPAndAuth(serverTCPAddr, password string) (*protocol.Ke
 	}
 
 	aead, _ := transport.NewAEAD(kTCP)
-	credJSON, _ := json.Marshal(map[string]string{"user": c.User, "pass": password})
+	credJSON, _ := json.Marshal(map[string]string{"user": user, "pass": password})
 	nonce := make([]byte, 12)
 	rand.Read(nonce)
 
-	auth := protocol.Auth{Type: "AUTH", Nonce: nonce, Sealed: aead.Seal(nil, nonce, credJSON, nil)}
+	typ := "AUTH"
+	if register {
+		typ = "REGISTER"
+	}
+	auth := protocol.Auth{Type: typ, Nonce: nonce, Sealed: aead.Seal(nil, nonce, credJSON, nil)}
 	if err := protocol.WriteMsg(conn, auth); err != nil {
 		return nil, [32]byte{}, err
 	}
@@ -216,8 +319,8 @@ func (c *Client) ConnectTCPAndAuth(serverTCPAddr, password string) (*protocol.Ke
 	if err := protocol.ReadMsg(conn, &res); err != nil {
 		return nil, [32]byte{}, err
 	}
-	if res.Type == "AUTH_FAIL" {
-		return nil, [32]byte{}, fmt.Errorf("auth failed: %s", res.Reason)
+	if res.Type != "AUTH_OK" {
+		return nil, [32]byte{}, &AuthError{Reason: res.Reason}
 	}
 
 	c.setOnline(res.Users, nil)
@@ -225,13 +328,18 @@ func (c *Client) ConnectTCPAndAuth(serverTCPAddr, password string) (*protocol.Ke
 	return &keyx, kUDP, nil
 }
 
-// AttachEndpoint dùng kết nối transport mới và khởi động vòng nhận của nó.
-func (c *Client) AttachEndpoint(ep transport.Endpoint) {
+// attach dùng kết nối transport mới và khởi động vòng nhận của nó, nếu phiên gen vẫn còn hiệu lực.
+func (c *Client) attach(gen uint64, ep transport.Endpoint) bool {
 	c.mu.Lock()
+	if c.gen != gen || c.closing {
+		c.mu.Unlock()
+		return false
+	}
 	c.ep = ep
 	c.seq = 0 // kết nối mới: đánh số lại từ 1, server cũng có SeqBuffer mới cho kết nối này
 	c.mu.Unlock()
-	go c.listenLoop(ep)
+	go c.listenLoop(gen, ep)
+	return true
 }
 
 // inStream là trạng thái một stream đang nhận từ server.
@@ -243,7 +351,7 @@ type inStream struct {
 
 // listenLoop là goroutine nhận của một kết nối: ghép các đoạn theo stream, phân loại theo byte đầu
 // (message hay file). Khi kết nối đóng mà người dùng không chủ động thoát thì chuyển sang kết nối lại.
-func (c *Client) listenLoop(ep transport.Endpoint) {
+func (c *Client) listenLoop(gen uint64, ep transport.Endpoint) {
 	streams := make(map[uint32]*inStream)
 	var inSeq protocol.SeqBuffer // sắp lại tin server gửi theo Seq; mỗi kết nối một bộ đệm mới
 	defer func() {
@@ -286,12 +394,18 @@ func (c *Client) listenLoop(ep transport.Endpoint) {
 			}
 
 		case <-ep.Done():
-			if c.isClosing() {
-				c.setState("disconnected")
+			// Logout đã gỡ ep và tự đặt trạng thái; chỉ kết nối lại khi đây vẫn là kết nối của phiên hiện tại.
+			c.mu.Lock()
+			current := c.ep == ep && c.gen == gen && !c.closing
+			if current {
+				c.ep = nil
+			}
+			c.mu.Unlock()
+			if !current {
 				return
 			}
 			c.setState("reconnecting")
-			go c.reconnectLoop()
+			go c.reconnectLoop(gen)
 			return
 		}
 	}
@@ -314,17 +428,28 @@ func (c *Client) handleMessage(inSeq *protocol.SeqBuffer, data []byte) {
 
 // reconnectLoop thử handshake lại với backoff 1, 2, 4... tối đa 30 s. Trong ~10 s đầu server có thể còn giữ
 // session cũ (chưa hết idle timeout) và trả AUTH_FAIL "đang online": cứ thử tiếp là vào được.
-func (c *Client) reconnectLoop() {
+// Dừng ngay khi người dùng đăng xuất (gen đổi).
+func (c *Client) reconnectLoop(gen uint64) {
 	delay := time.Second
-	for !c.isClosing() {
+	for {
 		time.Sleep(delay)
-		if err := c.dial(); err != nil {
-			c.Events.Add("status", fmt.Sprintf("kết nối lại thất bại: %v", err))
-			delay = min(delay*2, 30*time.Second)
-			continue
+		if !c.current(gen) {
+			return
 		}
-		return
+		err := c.dial(gen, false)
+		if err == nil || errors.Is(err, errStale) {
+			return
+		}
+		c.Events.Add("status", fmt.Sprintf("kết nối lại thất bại: %v", err))
+		delay = min(delay*2, 30*time.Second)
 	}
+}
+
+// current: phiên gen còn hiệu lực (chưa đăng xuất, chưa đăng nhập phiên mới).
+func (c *Client) current(gen uint64) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.gen == gen && !c.closing
 }
 
 // ErrNotConnected: đang mất kết nối (đang kết nối lại), chưa gửi được.

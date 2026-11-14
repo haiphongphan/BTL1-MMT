@@ -1,0 +1,16 @@
+# Đối chiếu với 10 bước của đề
+
+Bảng dưới đối chiếu từng bước trong bảng chấm điểm của đề (mỗi bước 1 điểm) với cách nhóm đáp ứng và vị trí trình bày trong báo cáo (`report/chapters/`).
+
+| Bước | Yêu cầu | Cách đáp ứng | Ở đâu trong báo cáo |
+|:---:|---|---|---|
+| 1 | Thiết kế giao thức | Gói UDP ≤ 1200 byte, 4 loại frame, nhiều stream ghép kênh trong 1 kết nối, nội dung stream MESSAGE/FILE | Mục *Đặc tả giao thức* (`03-giao-thuc.tex`) |
+| 2 | Handshake TCP | `HELLO` → `KEYX` → `AUTH` (hoặc `REGISTER`) → `AUTH_OK`/`AUTH_FAIL`, mỗi message đóng khung `[len][JSON]`; server dành một goroutine cho mỗi handshake, deadline 10 s | *Handshake TCP* (`03-giao-thuc.tex`), sequence diagram đăng nhập (`04-sequence.tex`) |
+| 3 | Đăng nhập, quản lý trạng thái | Trang đăng nhập / đăng ký trên Web UI; đăng ký tạo tài khoản mới (kiểm tra luật tên, mật khẩu, tên trùng) và ghi `users.json` nguyên tử; `users.json` chỉ lưu `sha256(salt ‖ pass)`; `Registry` (RWMutex) tra session theo tên và theo `conn_id`, từ chối đăng nhập trùng ngay trong lúc giữ khóa; mỗi session giữ địa chỉ TCP lúc handshake và IP:port UDP thật (log và hiện trong danh sách user); server ghi đè `From` nên không giả danh được; danh sách online phát lại cho mọi người khi có người vào/ra | *Kiến trúc hệ thống* (`02-kien-truc.tex`), *Bảo mật* (`07-bao-mat.tex`) |
+| 4 | Concurrency | Transport: 1 goroutine sở hữu state của mỗi kết nối, giao tiếp qua channel. Server: mỗi session có goroutine đọc (`serveSession`) và goroutine ghi (`writeLoop`) với hàng đợi riêng, nên một client chậm không chặn người khác; 20 client đồng thời chạy ổn định (bảng *Test hệ thống với server và client thật*, `08-kiem-thu.tex`) | *Mô hình concurrency* (`05-tin-cay.tex`), *Kiến trúc hệ thống* (`02-kien-truc.tex`) |
+| 5 | Streaming nhạy thời gian | Mỗi tin = 1 stream ưu tiên cao; không HoL ở cả phía gửi và phía nhận | *Không có Head-of-Line blocking* (`06-cc-hol.tex`) |
+| 6 | Truyền file tin cậy qua UDP | SACK, phát hiện mất 3 cách, gửi lại chỉ frame bị mất, ghép theo offset, SHA-256 đầu cuối | *Truyền tin cậy trên UDP* (`05-tin-cay.tex`) |
+| 7 | Resilience | Keep-alive 2 s, idle timeout 10 s, `CLOSE`, bỏ im lặng gói hỏng/giả mạo, RTO backoff. Server: `recover()` trong goroutine của mỗi session, xóa session idempotent, gói rác trên cả hai cổng bị bỏ qua. Client: tự kết nối lại với backoff 1–30 s, Ctrl+C gửi `CLOSE` | *Phát hiện mất kết nối* (`05-tin-cay.tex`), *State diagram* (`03-giao-thuc.tex`) |
+| 8 | Bảo mật | ECDH X25519 + AES-256-GCM, header là AAD, nonce không bao giờ lặp | *Bảo mật* (`07-bao-mat.tex`) |
+| 9 | Giao diện HTTP + JS thuần | HTTP/1.1 tự viết trên `net.Listen` (đọc request line, header, `Content-Length`); trang HTML + JavaScript thuần: trang đăng nhập / đăng ký, nút đăng xuất; poll `/api/events?since=N`: tin nhắn theo tab, danh sách user kèm IP:port, thanh tiến trình file ở cả bên gửi và bên nhận, thanh trạng thái mạng (RTT, cwnd, mất gói); upload file bằng `POST` thân thô; file tĩnh nhúng vào binary bằng `embed` | *Kiến trúc hệ thống* (`02-kien-truc.tex`) |
+| 10 | Test, chất lượng code | `go vet`, `go test -race`; test đơn vị protocol/transport; test tích hợp server (`FakePair`) và test hệ thống (server + 2 client thật qua UDP, loss 10%); phép đo trên mạng giả lập | *Kiểm thử* (`08-kiem-thu.tex`) |

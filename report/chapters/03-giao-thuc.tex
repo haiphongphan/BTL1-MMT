@@ -48,15 +48,14 @@ giá trị vài GB sẽ làm server bị tràn bộ nhớ (OOM) ngay lập tức
     1 & C $\to$ S & \texttt{HELLO} & \texttt{client\_pub}: khóa công khai X25519 \cite{rfc7748} tạm thời của phiên \\
     2 & S $\to$ C & \texttt{KEYX} & \texttt{server\_pub}, \texttt{conn\_id} (định danh kết nối UDP),
     \texttt{udp\_port} \\
-    3 & C $\to$ S & \texttt{AUTH} & \texttt{nonce} 12 byte ngẫu nhiên, \texttt{sealed} =
+    3 & C $\to$ S & \texttt{AUTH} hoặc \texttt{REGISTER} & \texttt{nonce} 12 byte ngẫu nhiên, \texttt{sealed} =
     AES-GCM$_{k_\text{tcp}}$(\{user, pass\}) \\
     4 & S $\to$ C & \texttt{AUTH\_OK} / \texttt{AUTH\_FAIL} & danh sách user đang online / lý do từ chối \\
     \bottomrule
   \end{tabularx}
 \end{table}
 
-Sau bước 2, cả client và server đều đã nhận được khóa công khai của đối phương và tự tính ra cùng một khóa bí
-mật chung (\emph{shared secret}) thông qua ECDH \cite{rfc7748} mà không cần truyền khóa này qua mạng. Từ bí mật chung đó, nhóm
+Sau bước 2, cả client và server đều đã nhận được khóa công khai của đối phương và tự tính ra cùng một khóa \emph{shared secret} thông qua ECDH \cite{rfc7748} mà không cần truyền khóa này qua mạng. Từ bí mật chung đó, nhóm
 dẫn xuất ra hai khóa đối xứng riêng biệt cho hai kênh:
 \begin{align}
   \mathit{shared} &= \mathrm{X25519}(\mathit{priv}, \mathit{peerPub}) \\
@@ -66,13 +65,20 @@ dẫn xuất ra hai khóa đối xứng riêng biệt cho hai kênh:
     \text{dùng để mã hóa toàn bộ gói UDP về sau}
 \end{align}
 Việc tách riêng $k_\text{tcp}$ và $k_\text{udp}$ là để tránh nguy cơ trùng lặp nonce giữa hai kênh: bản tin
-\texttt{AUTH} trên TCP lấy nonce ngẫu nhiên 12 byte, trong khi các gói UDP lại ghép nonce một cách tất định từ
+\texttt{AUTH} trên TCP lấy nonce ngẫu nhiên 12 byte, trong khi các gói UDP lại ghép nonce theo công thức cố định từ
 header của gói. Nếu dùng chung một khóa AES-GCM cho hai cách sinh nonce khác nhau thì xác suất va chạm nonce sẽ
 không còn bằng không (\cref{sec:bao-mat}).
 
 Khi client nhận được \texttt{AUTH\_OK}, hai bên đóng kết nối TCP. Ngay sau đó, client mở socket UDP và gửi gói
 PING đầu tiên mang theo \texttt{conn\_id} vừa được cấp để server ghi nhận địa chỉ IP và cổng UDP thực tế của
 client.
+
+\paragraph{Đăng ký.} Tài khoản mới đi qua đúng handshake trên, chỉ đổi \texttt{type} của message 3 thành
+\texttt{REGISTER}; mật khẩu vẫn nằm trong \texttt{sealed}. Server kiểm tra tên (3--20 ký tự, chỉ chữ không dấu,
+số và \texttt{\_}), độ dài mật khẩu (6--64) và tên trùng, rồi thêm tài khoản và đăng nhập luôn trên cùng kết nối:
+không cần handshake thứ hai. Lỗi trả \texttt{AUTH\_FAIL} kèm lý do cụ thể để trang đăng ký hiện cho người dùng.
+Tài khoản mới được ghi ra file tạm cùng thư mục rồi đổi tên đè lên \texttt{users.json}; đổi tên là \textbf{atomic operation} nên server tắt giữa chừng không để lại file hỏng, và một khóa ghi bảo đảm hai người đăng ký cùng lúc
+không ghi đè nhau. Kết nối lại tự động luôn dùng \texttt{AUTH}.
 
 \subsection{Gói UDP}
 \label{subsec:goi}
@@ -125,8 +131,7 @@ sau:
 
 \subsection{Frame}
 \label{subsec:frame}
-Phần payload sau khi giải mã của một gói UDP có thể chứa một hoặc nhiều \emph{frame} nối tiếp nhau. Bên nhận cứ
-đọc byte \texttt{type} đầu tiên để xác định cấu trúc và độ dài của frame hiện tại, tách frame đó ra xử lý, rồi
+Phần payload sau khi giải mã của một gói UDP có thể chứa một hoặc nhiều \emph{frame} nối tiếp nhau. Bên nhận đọc byte \texttt{type} đầu tiên để xác định cấu trúc và độ dài của frame hiện tại, tách frame đó ra xử lý, rồi
 đọc tiếp cho tới khi hết mảng byte. Cách ghép nhiều frame vào chung một gói cho phép nhóm đi kèm (piggyback)
 frame ACK ngay trong gói đang gửi dữ liệu chiều ngược lại. Hệ thống sử dụng bốn loại frame như ở \cref{tab:frame}.
 
@@ -256,7 +261,7 @@ các gói có \texttt{Seq} 2, 3 rồi mới tới 1 để xác nhận người n
 
 \subsection{State diagram}
 \label{subsec:state}
-Vòng đời của một client được biểu diễn qua máy trạng thái ở \cref{fig:state} (trong khi trạng thái nội bộ của riêng
+Vòng đời của một client được biểu diễn qua state diagram ở \cref{fig:state} (trong khi trạng thái nội bộ của riêng
 kết nối transport gồm \texttt{waiting}/\texttt{connected}/\texttt{closed} nằm trong \fname{transport.Stats.State} và
 được hiển thị lên Web UI cùng với RTT, cwnd). Trạng thái \textsc{Discovering} chỉ xuất hiện khi khởi chạy với tham số
 \texttt{-server auto} để tự dò tìm server trong mạng LAN; nếu người dùng chỉ định trực tiếp địa chỉ qua
@@ -264,27 +269,12 @@ kết nối transport gồm \texttt{waiting}/\texttt{connected}/\texttt{closed} 
 
 \begin{figure}[H]
   \centering
-  \tikzsetnextfilename{state-client}
-  \begin{tikzpicture}[font=\small, node distance=1.5cm and 1.4cm,
-      st/.style={draw, rounded corners, fill=blue!6, minimum width=3cm, minimum height=1cm, align=center},
-      ar/.style={-{Stealth}, thick}, lab/.style={font=\scriptsize, align=center}]
-    \node[st] (hs) {\textsc{Handshaking}\\TCP :9000};
-    \node[st, left=of hs] (di) {\textsc{Discovering}\\UDP :9002, $\le$ 5 s};
-    \node[st, right=of hs] (co) {\textsc{Connected}\\UDP, Web UI hoạt động};
-    \node[st, right=of co] (cl) {\textsc{Closed}};
-    \node[st, below=of hs] (re) {\textsc{Reconnecting}\\chờ 1, 2, 4\dots{} tối đa 30 s};
-    \draw[ar] (di) -- node[lab, above] {nghe được\\\texttt{COLLAB\_SERVER}} (hs);
-    \draw[ar] (hs) -- node[lab, above] {AUTH\_OK, \fname{Dial} UDP,\\gửi PING đầu} (co);
-    \draw[ar] (co) -- node[lab, above] {Ctrl+C, \texttt{/quit}:\\gửi CLOSE} (cl);
-    \draw[ar] (co.south) |- node[lab, pos=0.75, below] {\texttt{Done()} đóng: không nhận gì 10 s hoặc nhận CLOSE} (re.east);
-    \draw[ar] (hs) to[bend right=25] node[lab, left] {AUTH\_FAIL,\\lỗi mạng} (re);
-    \draw[ar] (re) to[bend right=25] node[lab, right] {hết thời gian chờ} (hs);
-  \end{tikzpicture}
+  \includegraphics[width=\linewidth]{img/state-client.png}
   \caption{State diagram của client}
   \label{fig:state}
 \end{figure}
 
-Ở phía server, mỗi \fname{Session} chuyển qua ba mốc: khởi tạo ở trạng thái \textsc{Pending} ngay sau khi gửi
+Ở phía server, mỗi \fname{Session} chuyển qua ba mốc (\cref{fig:state-server}): khởi tạo ở trạng thái \textsc{Pending} ngay sau khi gửi
 \texttt{AUTH\_OK} (lúc này username đã được ghi nhận vào \fname{Registry} nhưng server chưa biết địa chỉ UDP của
 client) $\to$ chuyển sang \textsc{Active} ngay khi nhận được gói UDP hợp lệ đầu tiên (server học được địa chỉ
 IP:port thực tế, ghi log và phát lại danh sách user kèm địa chỉ cho cả phòng) $\to$ cuối cùng bị xóa khỏi
@@ -294,3 +284,10 @@ hoặc bị ngắt vì hàng đợi gửi đầy). Nếu một client hoàn tấ
 transport mà không cần viết bộ hẹn giờ riêng. Trong khoảng thời gian dưới 10 giây khi server chưa kịp giải phóng
 phiên cũ, nếu client kết nối lại ngay thì sẽ tạm thời nhận \texttt{AUTH\_FAIL} (báo tài khoản đang online) và tự
 động thử lại thành công ở chu kỳ backoff kế tiếp.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\linewidth]{img/state-server.png}
+  \caption{State diagram của một \fname{Session} phía server}
+  \label{fig:state-server}
+\end{figure}

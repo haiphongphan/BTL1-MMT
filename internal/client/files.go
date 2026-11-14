@@ -40,6 +40,7 @@ func (c *Client) SendFile(path, to string) error {
 	if ep == nil {
 		return ErrNotConnected
 	}
+	user := c.Username()
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -60,7 +61,7 @@ func (c *Client) SendFile(path, to string) error {
 
 	meta := protocol.FileMeta{
 		ID:     newID(),
-		From:   c.User,
+		From:   user,
 		To:     to,
 		Name:   filepath.Base(path),
 		Size:   size,
@@ -71,7 +72,7 @@ func (c *Client) SendFile(path, to string) error {
 		return err
 	}
 
-	pr := &progressReader{r: f, ev: c.Events, p: FileProgress{ID: meta.ID, Dir: "out", From: c.User, Name: meta.Name, Size: size}}
+	pr := &progressReader{r: f, ev: c.Events, p: FileProgress{ID: meta.ID, Dir: "out", From: user, Name: meta.Name, Size: size}}
 	c.Events.Add("file_start", pr.p)
 
 	st := ep.OpenStream(false) // bulk: ưu tiên thấp hơn chat

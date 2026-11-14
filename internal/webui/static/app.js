@@ -1,26 +1,34 @@
 // app.js — JavaScript thuần, không thư viện. Chỉ nói chuyện với process client local qua fetch().
+// Hai màn hình: #auth (đăng nhập / đăng ký) khi /api/status báo logged_in = false, và #app sau khi đăng nhập.
 'use strict';
 
 const $ = (id) => document.getElementById(id);
 
+let loggedIn = null;  // null = chưa biết, true/false theo /api/status
+let session = 0;      // tăng mỗi lần vào #app; kết quả poll của phiên cũ bị bỏ qua
 let me = '';          // username của mình (lấy từ /api/status)
 let since = 0;        // seq của event cuối đã thấy
+let loginSince = -1;  // st.since của phiên đang hiển thị
 let currentTab = '';  // '' = chat chung, ngược lại = tên người đang DM
 let addrs = {};       // user → "ip:port" server báo kèm danh sách user
-const history = { '': [] };   // tab → danh sách tin
+let history = { '': [] };   // tab → danh sách tin
 const unread = new Set();
 
-// ---------- Poll event (mỗi 400 ms) ----------
+// ---------- Poll event (mỗi 400 ms, chỉ khi đã đăng nhập) ----------
 async function poll() {
-  try {
-    const res = await fetch(`/api/events?since=${since}`);
-    const events = await res.json();
-    for (const ev of events) {
-      since = ev.seq;
-      handle(ev);
+  const my = session;
+  if (loggedIn) {
+    try {
+      const events = await (await fetch(`/api/events?since=${since}`)).json();
+      if (my === session) {
+        for (const ev of events) {
+          since = ev.seq;
+          handle(ev);
+        }
+      }
+    } catch (e) {
+      setState('disconnected', '🔴 Không kết nối được client local');
     }
-  } catch (e) {
-    setState('disconnected', '🔴 Không kết nối được client local');
   }
   setTimeout(poll, 400);
 }
@@ -44,17 +52,114 @@ function handle(ev) {
 // ---------- Trạng thái mạng (poll /api/status mỗi 1 s) ----------
 async function pollStatus() {
   try {
-    const st = await (await fetch('/api/status')).json();
-    if (!me) { me = st.user; $('me').textContent = me; addrs = st.addrs || {}; renderUsers(st.online); }
-    $('server').textContent = `server ${st.server}`;
-    const icon = { connected: '🟢', reconnecting: '🟡', disconnected: '🔴' }[st.state] ?? '⚪';
-    setState(st.state, `${icon} ${st.state}`);
-    $('net').textContent =
-      `RTT ${st.rtt_ms.toFixed(1)} ms · cwnd ${(st.cwnd / 1024).toFixed(0)} KB · in-flight ${st.in_flight} B · ` +
-      `loss ${st.loss_pct.toFixed(1)}% (${st.lost_pkts}/${st.sent_pkts})`;
+    applyStatus(await (await fetch('/api/status')).json());
   } catch (e) { /* poll() đã báo */ }
   setTimeout(pollStatus, 1000);
 }
+
+// applyStatus chuyển màn hình khi trạng thái đăng nhập đổi (kể cả đăng xuất từ CLI hoặc tab khác),
+// rồi cập nhật thanh trạng thái.
+function applyStatus(st) {
+  if (!st.logged_in) {
+    if (loggedIn !== false) showAuth(st);
+    return;
+  }
+  if (loggedIn !== true || st.since !== loginSince) enterApp(st); // phiên mới (kể cả đăng nhập lại từ CLI)
+  $('server').textContent = `server ${st.server}`;
+  const icon = { connected: '🟢', reconnecting: '🟡', disconnected: '🔴' }[st.state] ?? '⚪';
+  setState(st.state, `${icon} ${st.state}`);
+  $('net').textContent =
+    `RTT ${st.rtt_ms.toFixed(1)} ms · cwnd ${(st.cwnd / 1024).toFixed(0)} KB · in-flight ${st.in_flight} B · ` +
+    `loss ${st.loss_pct.toFixed(1)}% (${st.lost_pkts}/${st.sent_pkts})`;
+}
+
+// ---------- Đăng nhập / đăng ký / đăng xuất ----------
+let authMode = 'login';
+
+function showAuth(st) {
+  loggedIn = false;
+  session++;
+  $('app').hidden = true;
+  $('auth').hidden = false;
+  if (!$('a-server').value) $('a-server').value = st.server || '127.0.0.1:9000';
+  if (!$('a-user').value && st.user) $('a-user').value = st.user;
+  $(($('a-user').value ? 'a-pass' : 'a-user')).focus();
+}
+
+// enterApp xóa giao diện của phiên trước và đọc event từ st.since (lúc bắt đầu phiên đăng nhập này),
+// nên tải lại trang vẫn thấy lại tin của phiên hiện tại nhưng không thấy tin của tài khoản trước.
+function enterApp(st) {
+  loggedIn = true;
+  session++;
+  me = st.user;
+  since = loginSince = st.since;
+  history = { '': [] };
+  unread.clear();
+  currentTab = '';
+  $('me').textContent = me;
+  $('messages').innerHTML = '';
+  $('filelist').innerHTML = '';
+  addrs = st.addrs || {};
+  renderUsers(st.online || []);
+  renderTabs();
+  $('auth').hidden = true;
+  $('app').hidden = false;
+  $('text').focus();
+}
+
+function setAuthMode(mode) {
+  authMode = mode;
+  for (const b of document.querySelectorAll('.authtabs button')) b.classList.toggle('active', b.dataset.mode === mode);
+  const reg = mode === 'register';
+  $('a-pass2-row').hidden = !reg;
+  $('a-pass2').required = reg;
+  $('a-pass').autocomplete = reg ? 'new-password' : 'current-password';
+  $('a-submit').textContent = reg ? 'Đăng ký' : 'Đăng nhập';
+  $('a-hint').innerHTML = reg
+    ? 'Tên 3–20 ký tự: chữ không dấu, số, dấu _. Mật khẩu 6–64 ký tự.'
+    : 'Server: <code>ip:port</code> của máy chạy server, hoặc <code>auto</code> để tự tìm trong LAN.';
+  $('a-err').textContent = '';
+}
+
+for (const b of document.querySelectorAll('.authtabs button')) b.onclick = () => setAuthMode(b.dataset.mode);
+
+$('authform').onsubmit = async (e) => {
+  e.preventDefault();
+  const server = $('a-server').value.trim(), user = $('a-user').value.trim(), pass = $('a-pass').value;
+  const err = $('a-err');
+  // Kiểm tra sơ bộ cho người dùng thấy lỗi ngay; server vẫn kiểm tra lại (luật nằm ở server).
+  if (authMode === 'register') {
+    if (!/^[A-Za-z0-9_]{3,20}$/.test(user)) { err.textContent = 'Tên đăng nhập 3–20 ký tự: chữ không dấu, số, dấu _'; return; }
+    if (pass.length < 6 || pass.length > 64) { err.textContent = 'Mật khẩu phải dài 6–64 ký tự'; return; }
+    if (pass !== $('a-pass2').value) { err.textContent = 'Hai mật khẩu không khớp'; return; }
+  }
+  const btn = $('a-submit'), label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = server === 'auto' ? 'Đang tìm server…' : 'Đang kết nối…';
+  err.textContent = '';
+  try {
+    const res = await fetch(`/api/${authMode}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ server, user, pass }),
+    });
+    if (!res.ok) { err.textContent = (await res.json()).error; return; }
+    $('a-pass').value = '';
+    $('a-pass2').value = '';
+    applyStatus(await (await fetch('/api/status')).json());
+  } catch (ex) {
+    err.textContent = 'Không gọi được client local: ' + ex.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+};
+
+$('logout').onclick = async () => {
+  await fetch('/api/logout', { method: 'POST' });
+  setAuthMode('login');
+  applyStatus(await (await fetch('/api/status')).json());
+};
 
 function setState(cls, text) {
   const el = $('state');
@@ -190,6 +295,5 @@ function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-renderTabs();
 pollStatus();
 poll();

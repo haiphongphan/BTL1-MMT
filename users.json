@@ -11,6 +11,10 @@
     "salt": "2b1bee61464d4d49",
     "hash": "aaa65547813ab001acfe7b271e73adba2fa22109c61cae2e9356aeecc7946805"
   },
+  "fff": {
+    "salt": "b09bcbeed910315a",
+    "hash": "ba522a30afb9adf89e3fc4ee24c4493eb1f595b5198367448e60d573947097dd"
+  },
   "hai": {
     "salt": "s3cr3t3",
     "hash": "e583bcb01b74c17f896904bf3ec0ab3fed06a1eb60f7583b83de473a36eca205"

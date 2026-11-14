@@ -7,35 +7,65 @@
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-<header id="statusbar">
-  <span id="me">…</span>
-  <span id="state" class="state">⚪ đang tải</span>
-  <span id="server" title="Server">server –</span>
-  <span id="net">RTT – · cwnd – · loss –</span>
-</header>
+<!-- Trang đăng nhập / đăng ký: hiện khi /api/status trả logged_in = false -->
+<div id="auth" hidden>
+  <form id="authform" class="card" autocomplete="on">
+    <h1>Collab</h1>
+    <div class="authtabs">
+      <button type="button" class="active" data-mode="login">Đăng nhập</button>
+      <button type="button" data-mode="register">Đăng ký</button>
+    </div>
+    <label>Server
+      <input id="a-server" placeholder="127.0.0.1:9000 hoặc auto" autocomplete="off" required>
+    </label>
+    <label>Tên đăng nhập
+      <input id="a-user" autocomplete="username" required>
+    </label>
+    <label>Mật khẩu
+      <input id="a-pass" type="password" autocomplete="current-password" required>
+    </label>
+    <label id="a-pass2-row" hidden>Nhập lại mật khẩu
+      <input id="a-pass2" type="password" autocomplete="new-password">
+    </label>
+    <p id="a-hint" class="hint">Server: <code>ip:port</code> của máy chạy server, hoặc <code>auto</code> để tự tìm trong LAN.</p>
+    <p id="a-err" class="err" role="alert"></p>
+    <button type="submit" id="a-submit">Đăng nhập</button>
+  </form>
+</div>
 
-<main>
-  <aside id="sidebar">
-    <h2>Online</h2>
-    <ul id="users"></ul>
-    <p class="hint">Bấm tên để chat riêng</p>
-  </aside>
+<!-- Ứng dụng chính: hiện sau khi đăng nhập -->
+<div id="app" hidden>
+  <header id="statusbar">
+    <span id="me">…</span>
+    <span id="state" class="state">⚪ đang tải</span>
+    <span id="server" title="Server">server –</span>
+    <span id="net">RTT – · cwnd – · loss –</span>
+    <button id="logout" type="button">Đăng xuất</button>
+  </header>
 
-  <section id="chat">
-    <nav id="tabs"><button class="tab active" data-tab="">Chung</button></nav>
-    <div id="messages"></div>
-    <form id="sendform">
-      <label class="filebtn" title="Gửi file cho người trong tab đang mở">📎<input id="file" type="file" hidden></label>
-      <input id="text" autocomplete="off" placeholder="Nhập tin nhắn…">
-      <button type="submit">Gửi</button>
-    </form>
-  </section>
+  <main>
+    <aside id="sidebar">
+      <h2>Online</h2>
+      <ul id="users"></ul>
+      <p class="hint">Bấm tên để chat riêng</p>
+    </aside>
 
-  <aside id="files">
-    <h2>File</h2>
-    <div id="filelist"></div>
-  </aside>
-</main>
+    <section id="chat">
+      <nav id="tabs"><button class="tab active" data-tab="">Chung</button></nav>
+      <div id="messages"></div>
+      <form id="sendform">
+        <label class="filebtn" title="Gửi file cho người trong tab đang mở">📎<input id="file" type="file" hidden></label>
+        <input id="text" autocomplete="off" placeholder="Nhập tin nhắn…">
+        <button type="submit">Gửi</button>
+      </form>
+    </section>
+
+    <aside id="files">
+      <h2>File</h2>
+      <div id="filelist"></div>
+    </aside>
+  </main>
+</div>
 
 <script src="/app.js"></script>
 </body>

@@ -6,7 +6,7 @@ tới đích sai thứ tự hoặc bị lặp lại, đồng thời bên gửi c
 kia hay mức độ tắc nghẽn của mạng. Để giải quyết vấn đề này, package \fname{internal/transport} của nhóm xây dựng
 một lớp truyền vận hướng kết nối ngay trên UDP, đảm bảo \textbf{truyền tin cậy, giữ đúng thứ tự trong từng
 stream, có mã hóa, không bị Head-of-Line blocking và tự động điều chỉnh tốc độ gửi}. Thiết kế của nhóm học hỏi
-nhiều ý tưởng từ QUIC \cite{rfc9000,rfc9002} nhưng được rút gọn cho vừa sức với quy mô bài tập lớn.
+nhiều ý tưởng từ QUIC \cite{rfc9000,rfc9002} nhưng được rút gọn cho vừa sức với quy mô bài tập lớn trong thời gian cho phép.
 \Cref{tab:van-de-udp} tóm tắt các vấn đề của UDP cùng hướng xử lý tương ứng trước khi đi vào từng cơ chế cụ thể.
 
 \begin{table}[H]
@@ -31,7 +31,7 @@ nhiều ý tưởng từ QUIC \cite{rfc9000,rfc9002} nhưng được rút gọn 
   \end{tabularx}
 \end{table}
 
-\subsection{Giao diện cho tầng ứng dụng}
+\subsection{Interface cho tầng ứng dụng}
 \label{sec:api}
 
 \begin{lstlisting}[caption={Interface tầng transport cung cấp cho tầng ứng dụng (\fname{api.go})},
@@ -110,7 +110,7 @@ truyền lại gói mất và cập nhật cửa sổ CUBIC \textbf{hoàn toàn 
 data race (đã kiểm chứng bằng \fname{go test -race}).
 
 Ở phía server, tất cả client dùng chung một cổng UDP 9001. Đối tượng \fname{Mux} chạy một goroutine
-\fname{readLoop} liên tục đọc gói từ socket, kiểm tra nhanh trường \texttt{conn\_id} nằm ở phần header rõ rồi đẩy
+\fname{readLoop} liên tục đọc gói từ socket, kiểm tra nhanh trường \texttt{conn\_id} nằm ở phần header rồi đẩy
 gói vào channel \texttt{in} của đúng \fname{Conn} tương ứng. Với 20 client kết nối cùng lúc, 20 goroutine
 \fname{run()} sẽ chạy độc lập với nhau, đảm bảo một kết nối bị nghẽn không ảnh hưởng tới các kết nối còn lại.
 
