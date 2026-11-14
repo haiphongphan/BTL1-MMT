@@ -1,82 +1,32 @@
 \section{Điều khiển tắc nghẽn và Head-of-Line blocking}
 \label{sec:cc-hol}
 
-Bên cạnh việc truyền tin cậy, đề bài còn đặt ra hai bài toán về hiệu năng đường truyền: điều khiển tắc nghẽn
-(nhóm chọn cài đặt thuật toán CUBIC) và loại bỏ hiện tượng Head-of-Line blocking giữa tin nhắn thời gian thực
-với luồng truyền file. Ở cả hai cơ chế, nhóm đều thực hiện đo đạc trên mạng giả lập để kiểm chứng kết quả.
-
 \subsection{CUBIC}
 \label{subsec:cubic}
-Nếu như điều khiển luồng (\cref{subsec:dieu-toc}) bảo vệ \emph{bên nhận} khỏi bị tràn bộ đệm, thì điều khiển tắc
-nghẽn giúp bảo vệ \emph{đường truyền mạng} khỏi bị quá tải. Phía gửi duy trì một cửa sổ tắc nghẽn \textit{cwnd}
-(\emph{congestion window}) giới hạn tổng số byte tối đa được phép đang bay trên mạng mà chưa có ACK. Giá trị
-\texttt{cwnd} tăng giảm động dựa trên tín hiệu mất gói. Nhóm cài đặt thuật toán CUBIC theo RFC~9438
-\cite{rfc9438} (cũng là thuật toán điều khiển tắc nghẽn mặc định trên nhân Linux) với các quy tắc chính sau:
-
+Điều khiển luồng (\cref{subsec:dieu-toc}) bảo vệ \emph{bên nhận}; điều khiển tắc nghẽn bảo vệ \emph{mạng} bằng
+cửa sổ \textit{cwnd} giới hạn số byte đang bay chưa có ACK. Nhóm cài CUBIC theo RFC~9438 \cite{rfc9438} (mặc định
+trên Linux):
 \begin{itemize}
-  \item \textbf{Slow start:} khi mới thiết lập kết nối, \texttt{cwnd} khởi tạo ở mức 10 gói (12 KB) \cite{rfc9002}. Mỗi khi có
-        $a$ byte dữ liệu được xác nhận ACK, \texttt{cwnd} được cộng thêm đúng $a$ byte, tức là tăng gấp đôi sau
-        mỗi chu kỳ RTT.
-  \item \textbf{Giảm cửa sổ khi mất gói:} ngay khi phát hiện mất gói, nhóm lưu lại đỉnh cửa sổ trước lúc nghẽn
-        $W_\text{max} \leftarrow \mathit{cwnd}$, giảm $\mathit{cwnd} \leftarrow \beta \cdot \mathit{cwnd}$ với
-        hệ số $\beta = 0{,}7$, đồng thời cập nhật ngưỡng $\mathit{ssthresh}$ để thoát khỏi giai đoạn slow start.
-        Một điểm cần lưu ý là trong cùng một đợt nghẽn có thể có nhiều gói bị rớt cùng lúc; do đó nhóm ghi nhận
-        mốc gói gửi đi tại thời điểm giảm cửa sổ và không tiếp tục cắt giảm \texttt{cwnd} đối với các gói cũ hơn
-        mốc này. Nếu thiếu bước lọc theo đợt (congestion epoch) này, \texttt{cwnd} sẽ bị nhân $0{,}7$ liên tiếp
-        nhiều lần chỉ vì một lần tràn hàng đợi duy nhất (tương ứng với \emph{recovery period} trong RFC~9002
-        \cite{rfc9002}).
-  \item \textbf{Giai đoạn thăm dò (Congestion Avoidance):} sau khi giảm, cửa sổ tăng trở lại theo hàm bậc ba của
-        thời gian $t$ tính từ thời điểm bắt đầu đợt hồi phục (tính theo đơn vị gói):
+  \item \textbf{Slow start:} \texttt{cwnd} bắt đầu ở 10 gói (12 KB) \cite{rfc9002} và cộng thêm đúng số byte được
+        ACK, tức gấp đôi mỗi RTT.
+  \item \textbf{Khi mất gói:} $W_\text{max} \leftarrow \mathit{cwnd}$, $\mathit{cwnd} \leftarrow 0{,}7 \cdot
+        \mathit{cwnd}$. Các gói gửi trước thời điểm giảm không làm giảm thêm lần nữa (\emph{recovery period}
+        \cite{rfc9002}); thiếu bước này thì một lần tràn hàng đợi sẽ nhân $0{,}7$ nhiều lần liên tiếp.
+  \item \textbf{Congestion avoidance:} cửa sổ tăng theo hàm bậc ba của thời gian $t$ từ lúc bắt đầu hồi phục:
         \begin{equation}
           W_\text{cubic}(t) = C\,(t-K)^3 + W_\text{max}, \qquad
-          K = \sqrt[3]{\frac{W_\text{max}(1-\beta)}{C}}, \qquad C = 0{,}4
+          K = \sqrt[3]{\frac{W_\text{max}(1-\beta)}{C}}, \qquad C = 0{,}4,\ \beta = 0{,}7
           \label{eq:cubic}
         \end{equation}
-        Đồ thị hàm bậc ba này có đặc trưng là tăng rất nhanh khi \texttt{cwnd} còn ở xa mức $W_\text{max}$, sau
-        đó giảm dần tốc độ và đi gần như nằm ngang khi tiệm cận vùng $W_\text{max}$ (vì đây chính là ngưỡng vừa
-        gây tràn bộ đệm mạng trước đó). Nếu ở quanh mức $W_\text{max}$ mà không thấy mất gói, nghĩa là mạng đã
-        rộng chỗ hơn, đường cong sẽ lại dốc lên nhanh để dò tìm mức băng thông mới. Nhờ phụ thuộc vào thời gian
-        thực $t$ thay vì đếm từng gói ACK, tốc độ phục hồi của CUBIC ít bị phụ thuộc vào độ dài RTT hơn so với
-        TCP truyền thống \cite{rfc9438}.
-  \item \textbf{Vùng tương thích Reno (Reno-friendly region):} song song với $W_\text{cubic}(t)$, nhóm tính thêm
-        cửa sổ ước lượng $W_\text{est}$ mô phỏng tốc độ tăng tuyến tính của thuật toán TCP Reno trong cùng điều
-        kiện (Reno tăng $\alpha = 3\frac{1-\beta}{1+\beta} \approx 0{,}53$ gói sau mỗi RTT) rồi lấy
-        $\mathit{cwnd} = \max(W_\text{cubic}, W_\text{est})$ \cite{rfc9438}. Nhánh này đảm bảo trên các mạng có RTT rất nhỏ hoặc
-        cửa sổ đang thấp, tốc độ tăng của CUBIC không bao giờ bị chậm hơn Reno.
-  \item \textbf{Giới hạn sàn và trần:} \texttt{cwnd} được chặn dưới ở mức tối thiểu 2 gói (2400 byte) để kết nối
-        luôn phát được gói thăm dò (\emph{minimum window} trong RFC~9002 \cite{rfc9002}), và chặn trên ở mức 1 MB bằng với kích thước cửa sổ nhận tối đa.
+        Đường cong tăng nhanh khi còn xa $W_\text{max}$, đi ngang khi tới gần (ngưỡng vừa gây tràn), rồi dốc lên
+        lại nếu không mất gói. Song song, nhóm tính $W_\text{est}$ mô phỏng Reno và lấy
+        $\mathit{cwnd} = \max(W_\text{cubic}, W_\text{est})$ để CUBIC không bao giờ chậm hơn Reno khi RTT nhỏ.
+  \item \textbf{Sàn và trần:} tối thiểu 2 gói, tối đa 1 MB (bằng cửa sổ nhận).
 \end{itemize}
 
-\begin{lstlisting}[caption={Tăng cwnd khi nhận ACK (\fname{cubic.go}, rút gọn)}, label=lst:cubic]
-func (c *cubic) OnAck(acked int, now time.Time) {
-	a := float64(acked)
-	if c.cwnd < c.ssthresh { // slow start: doubles every RTT
-		c.cwnd += a
-		return
-	}
-	if c.epoch.IsZero() { // first ACK after a loss: start a new cubic epoch
-		c.epoch, c.wEst = now, c.cwnd
-	}
-	c.wEst += cubicAlpha * mss * a / c.cwnd // Reno estimate: +alpha packets per RTT
-	cub := c.wCubic(now.Sub(c.epoch).Seconds())
-	if cub < c.wEst {
-		c.cwnd = math.Max(c.cwnd, c.wEst) // Reno-friendly region
-		return
-	}
-	target := math.Min(cub, 1.5*c.cwnd) // never more than 1.5x per RTT
-	if target > c.cwnd {
-		c.cwnd += (target - c.cwnd) * a / c.cwnd
-	}
-}
-\end{lstlisting}
-
-\paragraph{Thực nghiệm kiểm chứng.} Để quan sát đường đặc tính của CUBIC, nhóm cấu hình bộ giả lập mạng
-(\cref{subsec:gia-lap}) tạo một nhánh đường truyền cổ chai (bottleneck) có băng thông giới hạn ở mức 2 MB/s, độ
-trễ 20 ms mỗi chiều (RTT = 40 ms) và hàng đợi đệm 64 KB. Trong bài đo này nhóm \textbf{tắt chế độ rớt gói ngẫu
-nhiên}, sao cho mọi sự kiện mất gói đều xuất phát từ việc hàng đợi 64 KB bị đầy tràn khi gửi quá tốc độ 2 MB/s.
-Nhóm cho truyền một luồng dữ liệu 60 MB và ghi log giá trị \texttt{cwnd} theo từng chu kỳ \texttt{ticker} (test
-\fname{TestLongCCGraph} bật biến môi trường \texttt{BTL\_CCLOG}). Kết quả thu được như trên
-\cref{fig:cwnd,fig:cwnd-zoom}.
+\paragraph{Thực nghiệm.} Bộ giả lập (\cref{subsec:gia-lap}) tạo nút cổ chai 2 MB/s, RTT 40 ms, bộ đệm 64 KB,
+\textbf{không bật mất gói ngẫu nhiên}: mọi lần mất đều do tràn hàng đợi. Truyền 60 MB và ghi \texttt{cwnd} theo
+từng nhịp ticker (\fname{TestLongCCGraph}, biến môi trường \texttt{BTL\_CCLOG}).
 
 \begin{figure}[H]
   \centering
@@ -123,68 +73,47 @@ Nhóm cho truyền một luồng dữ liệu 60 MB và ghi log giá trị \textt
   \label{fig:cwnd-zoom}
 \end{figure}
 
-Nhìn vào hai đồ thị trên, có thể thấy rõ các giai đoạn hoạt động của thuật toán:
 \begin{itemize}
-  \item Trong nửa giây đầu tiên, pha slow start đẩy \texttt{cwnd} tăng vọt lên tới khoảng 297 KB, vượt quá xa dung
-        lượng thực của đường truyền nên dẫn tới ba đợt tràn hàng đợi liên tiếp (cửa sổ giảm từ 297 $\to$ 210 $\to$
-        148 $\to$ 105 KB) trước khi đi vào quỹ đạo ổn định.
-  \item Từ giây thứ 2 trở đi, các điểm đánh dấu mất gói (dấu $\times$ màu đỏ) đều đặn xuất hiện quanh ngưỡng
-        147 KB. Con số thực nghiệm này khớp sát với dung lượng tối đa trên đường truyền: tích băng thông -- độ trễ
-        ($\text{BDP} = 2\,\text{MB/s} \times 42\,\text{ms} \approx 84$ KB) cộng với bộ đệm router 64 KB là khoảng
-        148 KB. Ngay sau mỗi lần tràn bộ đệm, \texttt{cwnd} hạ xuống vùng 103 KB, đúng bằng $0{,}7 \times 147$ KB.
-  \item Khi phóng to đoạn từ giây thứ 3 đến giây thứ 16 (\cref{fig:cwnd-zoom}), đường cong giữa hai lần mất gói thể
-        hiện rõ dáng bậc ba: tăng nhanh từ 103 KB lên gần 145 KB, đi ngang thăm dò quanh $W_\text{max}$ rồi mới
-        nhích lên tiếp cho tới khi chạm ngưỡng 147 KB. Chu kỳ giữa hai lần mất gói đo được dao động từ 3,3 đến
-        4,8 giây (trung bình khoảng 4 s), khá sát với giá trị lý thuyết
-        $K = \sqrt[3]{126 \times 0{,}3 / 0{,}4} \approx 4{,}5$ s khi $W_\text{max} \approx 126$ gói.
-  \item Về thông lượng tổng thể, CUBIC đạt \textbf{2,01 MB/s}, tức tận dụng được trọn vẹn băng thông 2 MB/s của
-        đường truyền. Khi nhóm chạy đối chứng trên cùng cấu hình mạng nhưng khóa cứng cửa sổ ở mức 64 KB
-        (\texttt{-cc fixed}), tốc độ truyền chỉ đạt 1,47 MB/s do cửa sổ 64 KB nhỏ hơn BDP (84 KB) nên đường ống
-        truyền dẫn luôn bị bỏ trống một phần.
+  \item \textbf{Slow start} vọt lên 297 KB, vượt xa dung lượng đường truyền, gây ba lần tràn liên tiếp
+        (297 $\to$ 210 $\to$ 148 $\to$ 105 KB).
+  \item \textbf{Điểm mất gói ổn định quanh 147 KB}, khớp với $\text{BDP} = 2\,\text{MB/s} \times 42\,\text{ms}
+        \approx 84$ KB cộng bộ đệm 64 KB $= 148$ KB. Sau mỗi lần mất, \texttt{cwnd} về khoảng 103 KB, đúng
+        $0{,}7 \times 147$.
+  \item \textbf{Dáng bậc ba} hiện rõ ở \cref{fig:cwnd-zoom}: tăng nhanh, đi ngang quanh $W_\text{max}$, rồi nhích
+        lên. Chu kỳ giữa hai lần mất trung bình khoảng 4 s, sát với lý thuyết
+        $K = \sqrt[3]{126 \times 0{,}3 / 0{,}4} \approx 4{,}5$ s.
+  \item \textbf{Thông lượng 2,01 MB/s}, dùng trọn băng thông. Cửa sổ cố định 64 KB (\texttt{-cc fixed}) chỉ đạt
+        1,47 MB/s vì nhỏ hơn BDP.
 \end{itemize}
 
 \subsection{Giới hạn của CUBIC khi mất gói ngẫu nhiên}
 \label{subsec:cubic-gioi-han}
-Bên cạnh ưu điểm tận dụng tốt băng thông khi mạng nghẽn thật, quá trình đo đạc cũng giúp nhóm thấy rõ điểm yếu cố
-hữu của CUBIC khi gặp môi trường rớt gói ngẫu nhiên. Vì thuật toán
-quy mọi sự kiện rớt gói thành tín hiệu tràn bộ đệm mạng, nên khi bật giả lập rớt gói ngẫu nhiên 10\%
-(\texttt{-loss 0.1}, mô phỏng sóng Wi-Fi yếu) dù đường truyền thực tế đang rất thông thoáng, \texttt{cwnd} vẫn bị
-nhân $0{,}7$ liên tục và bị ép sát xuống đáy 2 gói. Hiện tượng này phù hợp với công thức Mathis \cite{mathis},
-trong đó thông lượng tỉ lệ nghịch với $\sqrt{p}$ ($p$ là xác suất mất gói):
-\begin{equation}
-  \text{throughput} \approx \frac{\mathit{MSS}}{\mathit{RTT}} \cdot \frac{1{,}22}{\sqrt{p}}
-\end{equation}
-Số liệu đo ở \cref{tab:do-transport} phản ánh đúng hạn chế này: với loss 10\% kèm jitter 20 ms, CUBIC phải mất
-48,3 giây mới truyền xong 5 MB (tương đương 0,11 MB/s), trong khi nếu dùng cửa sổ cố định 64 KB thì truyền 50 MB
-đạt tới 1,69 MB/s. Vì lý do đó, nhóm vẫn giữ lại cờ dòng lệnh \texttt{-cc fixed} để phục vụ việc demo khả năng
-truyền lại tin cậy ở các kịch bản ép loss cao 10--20\%. Để khắc phục triệt để hạn chế này ở tầng điều khiển tắc
-nghẽn, hướng đi phù hợp hơn là chuyển sang thuật toán BBR \cite{bbr} (dựa trên tốc độ băng thông thực tế và RTT
-tối thiểu thay vì dựa vào mất gói), được nhóm nêu ở phần hướng phát triển (\cref{sec:ket-luan}).
+CUBIC coi mọi lần mất gói là nghẽn. Với \texttt{-loss 0.1} (mô phỏng Wi-Fi yếu), \texttt{cwnd} bị ép xuống sàn
+2 gói dù đường truyền đang trống, đúng như công thức Mathis \cite{mathis}:
+$\text{throughput} \approx \frac{\mathit{MSS}}{\mathit{RTT}} \cdot \frac{1{,}22}{\sqrt{p}}$.
+Trong \cref{tab:do-transport}, với loss 10\% và jitter 20 ms, CUBIC mất 48,3 s cho 5 MB (0,11 MB/s), còn cửa sổ cố
+định 64 KB đạt 1,69 MB/s. Vì vậy nhóm giữ cờ \texttt{-cc fixed} cho các demo ở mức loss cao; hướng khắc phục
+triệt để là BBR \cite{bbr} (\cref{sec:ket-luan}).
 
 \subsection{Không có Head-of-Line blocking}
 \label{sec:hol}
-Hiện tượng \emph{Head-of-Line blocking} (HoL) xảy ra khi một luồng dữ liệu ngắn, cần phản hồi tức thời (như tin
-nhắn chat) bị buộc phải xếp hàng chờ phía sau một luồng dữ liệu lớn (như file hàng trăm MB). Chẳng hạn nếu gửi
-chung qua một kết nối TCP duy nhất, khi một segment của file bị rớt trên mạng, tầng TCP ở phía nhận phải giữ lại
-toàn bộ các byte đến sau (bao gồm cả tin nhắn chat gửi sau đó) để chờ segment file kia được truyền lại. Để triệt
-tiêu hiện tượng này theo yêu cầu đề bài, nhóm xử lý đồng thời ở cả chiều nhận và chiều gửi:
-
+Head-of-Line blocking xảy ra khi tin chat phải chờ sau dữ liệu file: trên một kết nối TCP, một segment file bị mất
+sẽ giữ lại mọi byte phía sau, kể cả tin chat. Nhóm loại bỏ HoL ở cả hai chiều:
 \begin{enumerate}
-  \item \textbf{Ở chiều nhận -- tách bộ đệm ghép theo từng stream:} mỗi tin nhắn chat và mỗi file đều đi trên một
-        \texttt{stream\_id} riêng biệt với cấu trúc \fname{recvStream} độc lập (\cref{subsec:ghep}), giống cách QUIC
-        giao dữ liệu độc lập giữa các stream \cite{rfc9000}. Nhờ vậy, khi
-        một gói UDP mang dữ liệu file bị rớt, chỉ có \fname{recvStream} của file đó phải tạm dừng chờ mảnh khuyết,
-        còn \fname{recvStream} của tin nhắn chat ngay khi nhận đủ byte là được đẩy thẳng lên \texttt{recvCh} cho
-        ứng dụng.
-  \item \textbf{Ở chiều gửi -- phân cấp hàng đợi ưu tiên:} nếu chỉ tách stream ở đầu nhận thì vẫn chưa đủ, bởi ở
-        đầu gửi, nếu frame của tin nhắn chat bị đẩy vào cuối cùng một hàng đợi đang có sẵn hàng trăm frame của
-        file thì tin nhắn vẫn phải chờ gửi hết chỗ frame file đó mới tới lượt đi ra socket. Do đó, hàm
-        \fname{takeFrames} (\cref{lst:takeframes}) chia hàng đợi gửi thành ba mức và luôn rút frame theo thứ tự ưu
-        tiên: \texttt{retransQ} (dữ liệu truyền lại) $\to$ \texttt{urgentQ} (tin nhắn chat/DM) $\to$
-        \texttt{bulkQ} (dữ liệu file). Khi người dùng bấm gửi tin nhắn giữa lúc đang tải file, frame của tin nhắn
-        đi vào \texttt{urgentQ} nên được chèn lên đi ngay trong gói UDP kế tiếp. Các frame truyền lại được xếp ở
-        mức cao nhất để nhanh chóng giải phóng các stream đang bị thiếu mảnh ở đầu nhận.
+  \item \textbf{Chiều nhận:} mỗi tin và mỗi file là một stream với \fname{recvStream} riêng (\cref{subsec:ghep}),
+        giống QUIC \cite{rfc9000}. Mất gói của file chỉ làm stream file chờ; tin chat đủ byte là giao ngay.
+  \item \textbf{Chiều gửi:} tách stream thôi chưa đủ, vì tin chat nằm cuối hàng đợi sau hàng trăm frame file vẫn
+        phải chờ. \fname{takeFrames} (\cref{lst:takeframes}) lấy frame theo ba mức ưu tiên \texttt{retransQ}
+        $\to$ \texttt{urgentQ} (chat/DM) $\to$ \texttt{bulkQ} (file), nên tin chat đi ngay trong gói kế tiếp.
 \end{enumerate}
+
+\paragraph{So sánh với QUIC và Steam GameNetworkingSockets.} Hai hệ thống đề bài gợi ý giải quyết HoL theo hai
+cách bổ sung cho nhau, và nhóm lấy ý tưởng từ cả hai. QUIC \cite{rfc9000} ghép nhiều \emph{stream} độc lập trên
+một kết nối, mỗi stream tự sắp thứ tự theo offset; nhóm dùng đúng mô hình này ở chiều nhận. Steam
+GameNetworkingSockets \cite{valve-gns} thì hướng \emph{message} (ứng dụng gửi/nhận nguyên một message thay vì luồng
+byte) và chia message vào các \emph{lane} có độ ưu tiên khác nhau, lane ưu tiên cao được gửi trước; hai hàng
+\texttt{urgentQ}/\texttt{bulkQ} của nhóm là phiên bản rút gọn của ý tưởng lane, còn \fname{SendMessage}
+(1 message = 1 stream, \cref{sec:api}) cho tầng ứng dụng giao diện hướng message tương tự.
 
 \begin{lstlisting}[caption={Lấy frame cho một gói theo thứ tự ưu tiên (\fname{conn.go}, rút gọn)},
   label=lst:takeframes]
@@ -207,11 +136,9 @@ func (c *Conn) takeFrames() []*protocol.StreamFrame {
 }
 \end{lstlisting}
 
-\paragraph{Thực nghiệm kiểm chứng} (\fname{TestLongHoL}). Nhóm thiết lập đường truyền giả lập có băng thông
-1 MB/s, độ trễ 20 ms mỗi chiều, bộ đệm 64 KB và tỉ lệ rớt gói 1\%. Trong khi một file 6 MB đang được truyền liên
-tục làm bão hòa băng thông, cứ mỗi 100 ms nhóm lại gửi một tin nhắn chat và đo độ trễ một chiều từ lúc gọi hàm gửi
-cho tới khi đầu bên kia nhận được tin. Để thấy rõ tác dụng của hàng đợi ưu tiên, nhóm đo so sánh với một phiên bản
-thử nghiệm cố tình đẩy cả tin nhắn chat vào chung hàng đợi \texttt{bulkQ} với file (\cref{tab:hol}).
+\paragraph{Thực nghiệm} (\fname{TestLongHoL}): đường truyền 1 MB/s, trễ 20 ms mỗi chiều, bộ đệm 64 KB, loss 1\%.
+Trong lúc file 6 MB chiếm hết băng thông, cứ 100 ms gửi một tin chat và đo độ trễ một chiều. Đối chứng là một bản
+cố ý đẩy tin chat vào chung \texttt{bulkQ} với file.
 
 \begin{table}[H]
   \centering
@@ -230,7 +157,5 @@ thử nghiệm cố tình đẩy cả tin nhắn chat vào chung hàng đợi \t
   \end{tabularx}
 \end{table}
 
-Số liệu ở \cref{tab:hol} cho thấy với thiết kế tách hàng đợi ưu tiên, độ trễ trung vị (p50) của tin nhắn chat khi
-mạng đang tải nặng chỉ nhỉnh hơn lúc mạng rảnh khoảng 2 ms (23,6 ms so với 21,4 ms). Ngược lại, nếu xếp chung hàng
-đợi với file thì tin nhắn bị trễ tới gần 1 giây (chậm hơn khoảng 40 lần) do phải nằm chờ sau 256 frame file trong
-hàng đợi gửi cộng thêm 64 KB bộ đệm trên đường truyền.
+Với hàng ưu tiên, p50 của tin chat khi mạng đang tải nặng chỉ hơn lúc rảnh khoảng 2 ms (23,6 so với 21,4 ms);
+xếp chung hàng với file thì trễ gần 1 giây, chậm hơn khoảng 40 lần.

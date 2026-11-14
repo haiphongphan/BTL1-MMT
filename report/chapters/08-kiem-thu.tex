@@ -48,47 +48,13 @@ Vì vậy, nhóm viết lớp bọc \fname{LossyConn} nằm ngay trên socket UD
 Ngoài việc dùng trong các file test, cả hai chương trình \fname{server} và \fname{client} đều hỗ trợ cờ dòng lệnh
 \texttt{-loss} (bọc \fname{LossyConn} quanh socket thật) để tiện demo trực tiếp khả năng chịu lỗi khi vấn đáp.
 
-\subsection{Unit Test và tích hợp của tầng giao thức và transport}
-Hai package \fname{internal/protocol} (20 test) và \fname{internal/transport} (45 test) có tổng cộng 65 test tự
-động, thời gian chạy toàn bộ khoảng 15 giây. Các nhóm kịch bản kiểm tra chính được tổng hợp trong
-\cref{tab:unit-test}.
-
-\begin{longtable}{L{0.24\linewidth} L{0.7\linewidth}}
-  \caption{Các nhóm test của tầng giao thức và transport}\label{tab:unit-test} \\
-  \toprule
-  \textbf{Nhóm} & \textbf{Nội dung kiểm tra} \\
-  \midrule
-  \endfirsthead
-  \toprule
-  \textbf{Nhóm} & \textbf{Nội dung kiểm tra} \\
-  \midrule
-  \endhead
-  Định dạng gói, frame & Encode rồi decode lại mọi loại frame và header ra đúng giá trị; đóng gói nhiều frame
-  trong cùng một gói; dữ liệu bị cắt cụt hoặc mã \texttt{type} lạ đều trả về lỗi chứ không panic; chuỗi
-  \texttt{reason} của frame CLOSE được cắt đúng ranh giới ký tự UTF-8 \\
-  Handshake, meta file & Đọc/ghi liên tiếp các khung \texttt{[len][JSON]}; từ chối khung khai báo độ dài vượt
-  ngưỡng; \fname{FileHeaderParser} tách đúng metadata ngay cả khi dữ liệu được truyền vào từng byte một \\
-  \fname{SeqBuffer} & Sắp xếp lại bản tin đến sai thứ tự (kể cả hoán vị ngẫu nhiên); lọc bỏ bản tin trùng số
-  \texttt{Seq}; tự nhảy qua khoảng trống khi vượt ngưỡng \texttt{MaxSeqPending} để tránh treo \\
-  ACK & Sinh đúng các khoảng SACK khi có gói bị khuyết hoặc gói trùng; giới hạn tối đa 8 khoảng SACK và giới hạn
-  bộ nhớ lưu lịch sử gói nhận \\
-  RTT, RTO & Khởi tạo mẫu RTT đầu tiên, công thức cập nhật SRTT/RTTVAR, đảm bảo RTO không co sát về RTT khi độ trễ
-  đều, kiểm tra ngưỡng phát hiện mất gói theo thời gian \\
-  Ghép stream & Giao dữ liệu đúng thứ tự khi gói đến xuôi, ngược, trùng lặp, chồng lấn một phần, hoặc khi cờ FIN
-  tới trước dữ liệu; tự động cắt frame $\le$ 1000 byte; trả lỗi khi ghi vào stream đã đóng \\
-  Mã hóa & Hai đầu ECDH tính ra cùng khóa; sửa bất kỳ byte nào trên gói đều làm giải mã thất bại; nonce phân biệt
-  giữa hai chiều truyền; không lộ plaintext trên đường truyền (\cref{sec:bao-mat}) \\
-  CUBIC & Pha slow start tăng gấp đôi mỗi RTT; giảm còn 70\% khi mất gói; quỹ đạo hàm bậc ba quanh $W_\text{max}$;
-  nhánh Reno-friendly; chặn sàn và trần \texttt{cwnd} \\
-  Truyền qua UDP thật & Truyền 5 MB qua đường truyền loss 20\% mỗi chiều khớp từng byte; truyền 1 MB qua loss
-  10\% với CUBIC; kiểm tra truyền dữ liệu chiều từ server $\to$ client \\
-  Vòng đời kết nối & Gọi \texttt{Close} báo ngay cho đầu bên kia; đóng \fname{Mux} giải phóng toàn bộ kết nối
-  con; tự phát hiện khi đầu bên kia ngừng phản hồi sau $\approx$ 10 s \\
-  Phát hiện mất, gửi lại & RTO exponential backoff nhân đôi khi đứt mạng; mất gói phát hiện theo số đếm không làm
-  tăng backoff; truyền lại giữ đúng thứ tự ban đầu; gói ACK cũ đến trễ không ghi đè \texttt{window} mới \\
-  Bộ giả lập & Chế độ jitter vẫn bảo toàn thứ tự FIFO; đường truyền bottleneck bỏ gói khi tràn hàng đợi \\
-  \bottomrule
-\end{longtable}
+\subsection{Unit Test của tầng giao thức và transport}
+Hai package \fname{internal/protocol} (20 test) và \fname{internal/transport} (45 test) có 65 test tự động, chạy hết
+khoảng 15 giây. Các test phủ: encode/decode mọi loại frame và từ chối dữ liệu hỏng mà không panic; SACK, RTT/RTO và
+ba điều kiện phát hiện mất gói; ghép stream khi gói đến ngược, trùng, chồng lấn hoặc FIN tới trước; mã hóa (không lộ
+bản rõ, sửa một byte là hỏng tag, nonce không trùng); các pha của CUBIC; truyền 5 MB qua loss 20\% khớp từng byte;
+vòng đời kết nối (CLOSE, idle timeout, RTO backoff); và bản thân bộ giả lập mạng. Bảng chi tiết từng nhóm test nằm
+trong \fname{docs/testing.md}.
 
 \subsection{Phép đo tầng transport}
 \label{subsec:do-transport}
@@ -120,13 +86,13 @@ Trong bảng trên, cột ``Gói mất'' là tỉ lệ gói tin mà phía gửi 
 số gói phát ra. Tỉ lệ này thường cao hơn con số \texttt{loss} cấu hình cho chiều đi vì bản thân các gói ACK ở
 chiều về cũng bị rớt theo cùng xác suất, khiến một số gói dữ liệu hết RTO và được gửi lại. Một kết quả đáng chú ý
 là ở kịch bản truyền 20 MB có jitter 20 ms nhưng không bật rớt gói (\texttt{loss 0\%}), tỉ lệ báo mất gói nhầm chỉ
-còn 0,2\% (trước khi nhóm sửa lại hàng đợi FIFO cho bộ giả lập jitter thì con số này lên tới 89\%, xem thử
-thách~\ref{tt:jitter}). Kết quả đo độ trễ tin nhắn chat khi truyền song song với file lớn đã được trình bày ở
+còn 0,2\% (bản đầu của bộ giả lập hẹn giờ riêng cho từng gói nên đảo thứ tự hàng loạt, làm con số này lên tới
+89\%; nhóm sửa lại để gói đi qua một hàng đợi FIFO như router thật). Kết quả đo độ trễ tin nhắn chat khi truyền song song với file lớn đã được trình bày ở
 \cref{tab:hol}.
 
 \subsection{Integration Test và hệ thống của tầng ứng dụng}
 \label{subsec:test-he-thong}
-Ở tầng ứng dụng, phía server có bộ 7 test tích hợp trong \fname{internal/server/router\_test.go} ghép trực tiếp
+Ở tầng ứng dụng, phía server có bộ 9 test tích hợp trong \fname{internal/server/router\_test.go} ghép trực tiếp
 logic định tuyến của server thật với kết nối trong bộ nhớ (\fname{transport.FakePair}), bao gồm:
 \begin{itemize}
   \item Broadcast 20 tin nhắn liên tiếp giữ đúng thứ tự và kiểm tra server tự động ghi đè trường \texttt{From}.
@@ -137,11 +103,16 @@ logic định tuyến của server thật với kết nối trong bộ nhớ (\f
         còn lại; chặn trường hợp hai client đăng nhập trùng tên.
   \item Các bản tin từ client gửi lên bị đảo thứ tự (\texttt{Seq} 2, 3 rồi mới tới 1) được \fname{SeqBuffer} của
         server sắp lại thành 1, 2, 3 và đánh lại dãy \texttt{Seq} liên tiếp trước khi phát xuống người nhận.
+  \item Danh sách user phát xuống có kèm địa chỉ của từng người (\fname{TestUserListHasAddrs}).
+  \item Người nhận chậm làm đầy hàng đợi bị ngắt riêng (\fname{TestSlowReceiverIsDisconnected}, mô tả bên dưới).
 \end{itemize}
+Thêm vào đó, \fname{TestRegisterValidatesAndPersists} (\fname{auth\_test.go}) kiểm tra luật tên, mật khẩu, tên
+trùng khi đăng ký và tài khoản mới được ghi xuống \texttt{users.json}.
 Ngoài ra, bộ test end-to-end trong \fname{internal/client/e2e\_test.go} khởi chạy cả server thật lẫn hai client
 thật giao tiếp qua socket UDP localhost với mức rớt gói 10\% ở mỗi chiều để kiểm tra toàn diện: chat đúng đích,
 truyền file 5 MB khớp mã băm SHA-256, tin nhắn DM gửi xen giữa lúc đang tải file vẫn tới ngay lập tức, và danh
-sách online tự cập nhật khi một bên đóng kết nối. Toàn bộ các test này đều được chạy kèm cờ \texttt{-race}.
+sách online tự cập nhật khi một bên đóng kết nối; \fname{TestRegisterLoginLogout} đi hết vòng đăng ký sai luật,
+đăng ký đúng, đăng xuất rồi đăng nhập lại như Web UI. Toàn bộ các test này đều được chạy kèm cờ \texttt{-race}.
 
 Bên cạnh đó, test tích hợp \fname{TestSlowReceiverIsDisconnected} kiểm tra thêm trường hợp một người nhận ngưng đọc
 làm đầy hàng đợi: các người gửi khác vẫn hoạt động bình thường không bị chặn, và chỉ riêng kết nối của người nhận

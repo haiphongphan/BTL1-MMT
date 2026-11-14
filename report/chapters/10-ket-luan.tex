@@ -2,40 +2,16 @@
 \label{sec:ket-luan}
 
 \subsection{Kết quả đạt được}
-Qua bài tập lớn này, nhóm đã tự thiết kế và cài đặt hoàn chỉnh một ứng dụng cộng tác thời gian thực (chat chung,
-nhắn tin riêng, truyền file) chạy trên giao thức tùy chỉnh trên nền UDP mà chỉ sử dụng thư viện chuẩn của Go.
-Ở tầng giao thức và transport, các mục tiêu kỹ thuật chính đều đạt được:
+Nhóm đã thiết kế và cài đặt hoàn chỉnh một ứng dụng cộng tác (chat chung, nhắn riêng, gửi file) chạy trên giao
+thức tự thiết kế trên UDP, chỉ dùng thư viện chuẩn của Go. Những kết quả chính, đều có số đo kiểm chứng:
 \begin{itemize}
-  \item Truyền dữ liệu tin cậy và toàn vẹn từng byte ngay cả khi đường truyền rớt 20\% gói ở mỗi chiều; cơ chế
-        SACK giúp bên gửi chỉ phải truyền lại đúng những frame STREAM bị thất lạc.
-  \item Thuật toán điều khiển tắc nghẽn CUBIC tận dụng hết băng thông đường truyền cổ chai (đạt 2,01 MB/s trên
-        nhánh 2 MB/s), với quỹ đạo cửa sổ \texttt{cwnd} thể hiện đúng đường cong bậc ba theo RFC~9438 \cite{rfc9438}.
-  \item Loại bỏ hiện tượng Head-of-Line blocking: khi gửi tin nhắn chat xen giữa lúc đang tải file lớn, độ trễ
-        trung vị của tin nhắn chỉ tăng thêm khoảng 2 ms so với lúc mạng rảnh (thay vì bị kẹt tới gần 1 giây nếu
-        xếp chung hàng đợi).
-  \item Toàn bộ gói UDP được mã hóa và xác thực bằng AES-256-GCM \cite{gcm} với khóa phiên sinh từ ECDH X25519 \cite{rfc7748}, phần header
-        được bảo vệ qua AAD và cơ chế ghép nonce đảm bảo không bao giờ trùng lặp.
-  \item Kiến trúc một goroutine sở hữu toàn bộ state cho mỗi kết nối giúp tầng transport hoạt động ổn định, không
-        cần dùng mutex và vượt qua toàn bộ bài kiểm tra \fname{go test -race}.
-\end{itemize}
-
-Ở tầng ứng dụng và giao diện:
-\begin{itemize}
-  \item Server phục vụ ổn định 20 client đồng thời với số lượng goroutine cố định (4 goroutine cho mỗi client, tổng
-        cộng 86 goroutine) và mức tiêu thụ bộ nhớ duy trì quanh khoảng 15 MB; các luồng chat chung, tin nhắn riêng
-        và truyền file đều đi qua cùng một kết nối UDP, đến đúng người nhận và giữ đúng thứ tự nhờ cơ chế đánh số
-        \texttt{Seq} ở tầng ứng dụng.
-  \item Luồng truyền file qua server được chuyển tiếp theo kiểu pipeline nên bộ nhớ của server không tăng theo kích
-        thước file; phía người nhận tự động kiểm tra mã băm SHA-256 đầu cuối; các tin nhắn chat gửi xen kẽ trong lúc
-        đang truyền file 200 MB vẫn tới đích trong khoảng 0,1 giây.
-  \item Giao diện web hoạt động trên HTTP/1.1 server tự viết kết hợp với JavaScript thuần, hỗ trợ đầy đủ danh sách
-        người dùng online, chuyển tab chat chung và chat riêng, gửi file kèm thanh tiến trình ở cả hai đầu, cùng
-        thanh trạng thái hiển thị trực tiếp RTT, cwnd và tỉ lệ mất gói.
-  \item Client có khả năng tự động tìm server trong mạng LAN qua gói UDP broadcast (\texttt{-server auto}); phía
-        server ghi nhận địa chỉ IP:port UDP thực tế của từng tài khoản và đồng bộ lên danh sách online.
-  \item Client tự động kết nối lại với cơ chế backoff khi mất kết nối hoặc khi server khởi động lại, đồng thời cả
-        client lẫn server đều chủ động phát gói \texttt{CLOSE} khi tắt bằng Ctrl+C để phía bên kia cập nhật trạng
-        thái ngay mà không phải chờ hết idle timeout.
+  \item \textbf{Tin cậy:} dữ liệu đúng từng byte khi mất 20\% gói mỗi chiều; file 200 MB qua server khớp SHA-256
+        mà bộ nhớ server không tăng theo kích thước file.
+  \item \textbf{Hiệu năng:} CUBIC dùng hết 2 MB/s của nút cổ chai, quỹ đạo \texttt{cwnd} đúng đường bậc ba; không
+        có HoL: tin chat khi đang truyền file chỉ trễ thêm khoảng 2 ms (p50).
+  \item \textbf{Bảo mật:} X25519 + AES-256-GCM, header được xác thực qua AAD, nonce không bao giờ lặp.
+  \item \textbf{Ổn định:} 20 client đồng thời với số goroutine cố định; tự kết nối lại; \texttt{CLOSE} khi tắt nên
+        danh sách online cập nhật ngay; \fname{go test -race} sạch.
 \end{itemize}
 
 \subsection{Hướng phát triển}

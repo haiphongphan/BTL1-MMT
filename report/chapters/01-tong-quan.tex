@@ -16,6 +16,13 @@ bảo gói tới đích và cũng không giữ thứ tự, nhóm cần tự xây
   \item Loại bỏ \emph{Head-of-Line blocking} (HoL), tức là khi đang truyền một file lớn thì các tin nhắn chat gửi xen kẽ không bị kẹt lại chờ file truyền xong.
 \end{itemize}
 
+\paragraph{Vai trò của TCP và UDP.} Mục ``Techniques'' của đề gợi ý dùng TCP để truyền tin nhắn/file và UDP cho
+heartbeat/discovery, trong khi mục ``Goal'' và bước 6 của bảng chấm điểm yêu cầu tin nhắn và file đi trên
+\emph{UDP streaming} với cơ chế tin cậy tự xây. Nhóm theo yêu cầu của bước 6: TCP chỉ dùng cho handshake ngắn
+(trao khóa, đăng nhập --- bước 2) rồi đóng ngay; mọi tin nhắn, file, heartbeat (PING) đều đi trên UDP, còn UDP
+broadcast dùng cho việc tự tìm server trong LAN. Thiết kế transport tham khảo hai hệ thống message-oriented mà đề
+gợi ý: Google QUIC \cite{rfc9000,rfc9002} và Steam GameNetworkingSockets \cite{valve-gns}.
+
 \subsection{Lựa chọn công nghệ}
 Nhóm hiện thực toàn bộ hệ thống bằng ngôn ngữ \textbf{Go} và \textbf{chỉ sử dụng thư viện chuẩn} (standard
 library). Các package chính được dùng gồm:
@@ -56,3 +63,4 @@ Giữa tầng ứng dụng và tầng transport, nhóm giao tiếp thông qua m�
 bản tin ngắn, mở một stream dài để truyền file, hoặc đọc các mảnh byte đã được sắp xếp đúng thứ tự từ channel
 nhận về. Toàn bộ phần việc nặng ở dưới như chia nhỏ gói tin, đánh số thứ tự, gửi ACK, truyền lại gói mất hay mã
 hóa đều được gói gọn bên trong \fname{internal/transport}.
+

@@ -1,3 +1,3 @@
 module github.com/phongphanhai06/go-collab
 
-go 1.27.3
+go 1.22

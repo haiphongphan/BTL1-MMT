@@ -43,8 +43,7 @@ Trong phạm vi một kết nối, \texttt{packet\_num} chỉ tăng dần và m�
 nonce. Đặc biệt, byte thứ 9 chỉ \emph{chiều truyền} (\texttt{0} cho chiều client $\to$ server, \texttt{1} cho
 chiều server $\to$ client) là chi tiết bắt buộc phải có: bởi cả hai phía đều dùng chung khóa $k_\text{udp}$ và
 đều bắt đầu đếm \texttt{packet\_num} từ 0, nếu quên gắn byte chiều truyền thì gói số $n$ của client gửi lên và
-gói số $n$ của server gửi xuống sẽ sinh ra đúng cùng một nonce. Đây cũng chính là một bug thực tế mà nhóm đã phát
-hiện và sửa trong quá trình làm bài (xem thử thách~\ref{tt:nonce}).
+gói số $n$ của server gửi xuống sẽ sinh ra đúng cùng một nonce(thử thách~\ref{tt:nonce}).
 
 \paragraph{Xử lý gói lỗi và chống phát lại (replay).} Khi nhận một gói UDP bị sai magic/version, mang
 \texttt{conn\_id} không tồn tại hoặc giải mã GCM thất bại, bên nhận chỉ âm thầm bỏ qua gói đó mà không gửi bất kỳ
@@ -58,21 +57,9 @@ mốc cao nhất từng thấy \emph{và đã vượt qua bước xác thực GC
 bên trong gói bị replay cũng bị chặn lại ở hai lớp: bộ theo dõi ACK bỏ qua những \texttt{packet\_num} đã nhận, và
 bộ ghép stream (\fname{recvStream}) bỏ qua những đoạn byte có \texttt{offset} đã giao cho ứng dụng.
 
-\subsection{Kiểm chứng bằng Unit Test}
-Để tự động kiểm tra các tính chất bảo mật ở tầng giao thức, nhóm viết bộ test trong \fname{internal/transport}:
-\begin{itemize}
-  \item \fname{TestWireIsEncrypted}: bọc một lớp ghi log bên dưới socket UDP để chụp lại toàn bộ mảng byte thực
-        tế đi ra card mạng khi gửi một tin nhắn có chứa chuỗi đánh dấu \texttt{"SECRET\_PLAINTEXT\_MARKER"}, sau
-        đó quét tìm chuỗi này trên toàn bộ các gói thu được. Test xác nhận không xuất hiện bản rõ trên đường
-        truyền, đồng thời kiểm tra mọi gói phát ra đều đúng cấu trúc và $\le$ 1200 byte.
-  \item \fname{TestTamperedPacketRejected}: thử lật (flip) lần lượt từng byte một ở cả vùng header lẫn vùng
-        ciphertext/tag và kiểm tra hàm giải mã đều trả về lỗi xác thực.
-  \item \fname{TestWrongDirectionRejected} và \fname{TestNonceUniquePerDirectionAndPN}: kiểm tra gói mã hóa ở
-        chiều client $\to$ server không thể giải mã bằng hàm nhận chiều ngược lại, và hàm tạo nonce sinh giá trị
-        phân biệt cho mọi cặp (chiều truyền, \texttt{packet\_num}).
-  \item \fname{TestDeriveKeysBothSidesAgree} và \fname{TestDeriveKeysRejectsBadPublicKey}: kiểm tra hai đầu ECDH
-        tính ra đúng cùng cặp khóa $(k_\text{tcp}, k_\text{udp})$ và từ chối khóa công khai không hợp lệ.
-\end{itemize}
+Các tính chất trên đều có unit test tự động: không thấy bản rõ trên đường truyền (\fname{TestWireIsEncrypted}),
+sửa bất kỳ byte nào thì giải mã thất bại (\fname{TestTamperedPacketRejected}), nonce không trùng giữa hai chiều, và
+hai đầu ECDH ra cùng khóa (danh sách đầy đủ trong \fname{docs/testing.md}).
 
 \subsection{Bảo mật ở tầng ứng dụng}
 \paragraph{Lưu trữ và kiểm tra mật khẩu.} File cơ sở dữ liệu \texttt{users.json} trên server không lưu mật khẩu
@@ -96,26 +83,25 @@ hiển thị \texttt{alice}). Để ngăn một tài khoản đăng nhập ở h
 thực hiện cả bước kiểm tra đang online lẫn bước ghi danh vào map trong cùng một miền giữ khóa (\texttt{Lock}),
 nhờ vậy hai request đăng nhập cùng một tên tới sát nhau cũng không thể lọt qua cả hai.
 
-\paragraph{Kiểm tra thực tế bằng Wireshark.} Nhóm đã bật Wireshark bắt gói trên giao diện loopback với bộ lọc
-\texttt{tcp.port == 9000 || udp.port == 9001}. Trên cổng TCP 9000 chỉ xuất hiện 4 bản tin JSON của quá trình
-handshake; bên trong bản tin \texttt{AUTH} chỉ có hai trường base64 là \texttt{nonce} và \texttt{sealed}, hoàn
-toàn không thấy username hay mật khẩu dạng chữ rõ. Trên cổng UDP 9001, mỗi gói chỉ lộ 12 byte header đầu
-(\texttt{conn\_id}, \texttt{packet\_num}, \texttt{flags}), còn toàn bộ phần sau là mảng byte ngẫu nhiên của
-ciphertext; khi dùng chức năng \emph{Follow UDP stream} để tìm nội dung câu chat vừa gõ trên trình duyệt thì
-không tìm thấy chuỗi nào khớp, đúng như kết quả của \fname{TestWireIsEncrypted}.
-% Chèn ảnh chụp khi có: lưu vào report/graphics/ws-auth.png và ws-udp.png rồi bỏ comment hai khối sau.
-%\begin{figure}[H]
-%  \centering
-%  \includegraphics[width=0.95\linewidth]{graphics/ws-auth.png}
-%  \caption{Message \texttt{AUTH} trên TCP 9000: chỉ thấy base64 của \texttt{nonce} và \texttt{sealed}}
-%  \label{fig:ws-auth}
-%\end{figure}
-%\begin{figure}[H]
-%  \centering
-%  \includegraphics[width=0.95\linewidth]{graphics/ws-udp.png}
-%  \caption{Gói UDP 9001 khi đang chat: 12 byte header rõ, phần còn lại là ciphertext}
-%  \label{fig:ws-udp}
-%\end{figure}
+\paragraph{Kiểm tra thực tế bằng Wireshark.} Bắt gói trên loopback với bộ lọc
+\texttt{tcp.port == 9000 || udp.port == 9001}. Trên TCP 9000, bản tin \texttt{AUTH} chỉ chứa hai trường base64
+\texttt{nonce} và \texttt{sealed}, không thấy username hay mật khẩu\IfFileExists{img/ws-auth.png}{ (\cref{fig:ws-auth})}{}. Trên UDP 9001, mỗi gói
+chỉ lộ 12 byte header; phần còn lại là ciphertext, tìm nội dung câu chat vừa gõ không thấy\IfFileExists{img/ws-udp.png}{ (\cref{fig:ws-udp})}{}.
+
+\IfFileExists{img/ws-auth.png}{%
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.95\linewidth]{img/ws-auth.png}
+  \caption{Message \texttt{AUTH} trên TCP 9000: chỉ thấy base64 của \texttt{nonce} và \texttt{sealed}}
+  \label{fig:ws-auth}
+\end{figure}}{}
+\IfFileExists{img/ws-udp.png}{%
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.95\linewidth]{img/ws-udp.png}
+  \caption{Gói UDP 9001 khi đang chat: 12 byte header rõ (\texttt{c0 de 01 00}\dots), phần còn lại là ciphertext; tìm chuỗi \texttt{hello} vừa chat trong mọi gói đều không thấy}
+  \label{fig:ws-udp}
+\end{figure}}{}
 
 \subsection{Hạn chế hiện tại}
 Trong khuôn khổ thời gian của bài tập lớn, cơ chế bảo mật của nhóm vẫn còn một số điểm có thể cải thiện thêm:

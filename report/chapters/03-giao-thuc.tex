@@ -73,12 +73,9 @@ Khi client nhận được \texttt{AUTH\_OK}, hai bên đóng kết nối TCP. N
 PING đầu tiên mang theo \texttt{conn\_id} vừa được cấp để server ghi nhận địa chỉ IP và cổng UDP thực tế của
 client.
 
-\paragraph{Đăng ký.} Tài khoản mới đi qua đúng handshake trên, chỉ đổi \texttt{type} của message 3 thành
-\texttt{REGISTER}; mật khẩu vẫn nằm trong \texttt{sealed}. Server kiểm tra tên (3--20 ký tự, chỉ chữ không dấu,
-số và \texttt{\_}), độ dài mật khẩu (6--64) và tên trùng, rồi thêm tài khoản và đăng nhập luôn trên cùng kết nối:
-không cần handshake thứ hai. Lỗi trả \texttt{AUTH\_FAIL} kèm lý do cụ thể để trang đăng ký hiện cho người dùng.
-Tài khoản mới được ghi ra file tạm cùng thư mục rồi đổi tên đè lên \texttt{users.json}; đổi tên là \textbf{atomic operation} nên server tắt giữa chừng không để lại file hỏng, và một khóa ghi bảo đảm hai người đăng ký cùng lúc
-không ghi đè nhau. Kết nối lại tự động luôn dùng \texttt{AUTH}.
+\paragraph{Đăng ký.} Dùng đúng handshake trên, chỉ đổi \texttt{type} của message 3 thành \texttt{REGISTER}.
+Server kiểm tra luật tên, mật khẩu và tên trùng, ghi \texttt{users.json} nguyên tử (ghi file tạm rồi đổi tên) và
+đăng nhập luôn trên cùng kết nối.
 
 \subsection{Gói UDP}
 \label{subsec:goi}
@@ -116,7 +113,8 @@ sau:
         (đây cũng là kích thước gói khởi tạo mà QUIC \cite{rfc9000} khuyến nghị). Trừ đi 12 byte header và 16 byte
         authentication tag của AES-GCM, phần payload chứa các frame còn tối đa $1200 - 12 - 16 = 1172$ byte.
   \item Hai trường \texttt{magic} (\texttt{0xC0DE}) và \texttt{ver} giúp bên nhận lọc bỏ nhanh các gói UDP lạ
-        trên cổng mà không tốn CPU gọi hàm giải mã.
+        trên cổng mà không tốn CPU gọi hàm giải mã. Byte \texttt{flg} hiện chưa dùng (luôn bằng 0), để dành cho
+        mở rộng giao thức sau này; vì nằm trong AAD nên cũng không bị sửa được trên đường truyền.
   \item \texttt{conn\_id} dùng để định danh phiên kết nối. Nhờ trường này, phía server chỉ cần mở một socket UDP
         duy nhất cho tất cả client rồi tra bảng ánh xạ \texttt{conn\_id} để đẩy gói về đúng kết nối. Cách này
         cũng giúp phiên kết nối không bị đứt nếu địa chỉ IP/port của client bị đổi giữa chừng (chẳng hạn do
@@ -144,7 +142,8 @@ frame ACK ngay trong gói đang gửi dữ liệu chiều ngược lại. Hệ t
     \textbf{Type} & \textbf{Tên} & \textbf{Cấu trúc (byte)} & \textbf{ACK?} & \textbf{Ý nghĩa} \\
     \midrule
     0x01 & STREAM & \texttt{type(1) flags(1) stream\_id(4) offset(4) len(2) data} & Có &
-    Một mảnh dữ liệu ($\le$ 1000 byte) của stream; bit 0 của \texttt{flags} là cờ FIN \\
+    Một mảnh dữ liệu ($\le$ 1000 byte) của stream; bit 0 của \texttt{flags} là cờ FIN, đóng vai trò cờ
+    \emph{End-of-Message} (hết tin nhắn/hết file) \\
     0x02 & ACK & \texttt{type(1) window(4) n(1)} $n \times$ \texttt{[start(4) end(4)]} & Không &
     SACK theo khoảng \texttt{packet\_num} ($n \le 8$) kèm kích thước cửa sổ nhận \\
     0x03 & PING & \texttt{type(1)} & Có & Giữ kết nối (keep-alive) và báo địa chỉ UDP của client cho server \\
@@ -176,10 +175,6 @@ dữ liệu của gói đó. Ngoài ra, trường \texttt{window} báo cho bên 
 nhằm phục vụ điều khiển luồng (\cref{subsec:dieu-toc}). Một quy tắc quan trọng là các gói chỉ chứa frame ACK (hoặc
 CLOSE) sẽ không kích hoạt việc gửi ACK ngược lại, tránh tạo ra vòng lặp ACK vô tận giữa hai máy (quy tắc gói \emph{ack-eliciting} của QUIC \cite{rfc9000}).
 
-\paragraph{CLOSE.} Trường \texttt{reason} chứa chuỗi UTF-8 giải thích lý do đóng kết nối với độ dài lưu trong 1
-byte ($\le$ 255 byte). Khi chuỗi dài quá 255 byte và cần cắt bớt, hàm encode của nhóm lùi về đúng ranh giới
-rune UTF-8 gần nhất để không cắt đôi các ký tự tiếng Việt nhiều byte.
-
 \subsection{Nội dung stream (tầng ứng dụng)}
 \label{subsec:app}
 Khi một stream được giao lên tầng ứng dụng, byte đầu tiên của stream đóng vai trò phân loại nội dung:
@@ -199,6 +194,7 @@ type AppMsg struct {
 	To    string   `json:"to,omitempty"`
 	Text  string   `json:"text,omitempty"`
 	Users []string `json:"users,omitempty"`
+	Addrs map[string]string `json:"addrs,omitempty"` // user -> UDP "ip:port"
 	TS    int64    `json:"ts"`            // UnixMilli
 	Seq   uint64   `json:"seq,omitempty"` // per-connection message number
 }
@@ -217,6 +213,15 @@ toàn có thể tới đích trước cả bản tin metadata. Ở đầu nhận
 cho tới khi tách xong phần JSON \fname{FileMeta} rồi chuyển thẳng các byte tiếp theo vào file đang mở. Khi nhận
 tới cờ FIN, bên nhận băm lại file bằng SHA-256 và đối chiếu với trường \texttt{SHA256} trong metadata để kiểm
 chứng toàn vẹn đầu-cuối (end-to-end).
+
+\paragraph{Theo dõi user, IP và cổng; phát hiện diện (presence).} Mỗi \fname{Session} trong \fname{Registry}
+lưu \texttt{Username}, \texttt{ConnID}, địa chỉ TCP lúc handshake (\texttt{TCPAddr}) và \fname{Endpoint} UDP; địa
+chỉ IP:port UDP thực tế được lấy từ \fname{Stats().Peer} của endpoint, tức địa chỉ của gói hợp lệ mới nhất (trước
+khi có gói UDP đầu tiên thì dùng IP lúc handshake). Khi có người vào (lúc server nhận gói UDP đầu tiên của họ,
+\fname{watchPeer}) hoặc ra (\fname{dropSession}), server phát bản tin \texttt{users} (kèm \texttt{Addrs}) tới mọi
+client, nên danh sách online trên giao diện luôn hiện đúng người và
+IP:port của họ (\fname{TestUserListHasAddrs}). Việc ``broadcast presence'' vì vậy do server đảm nhận: client chỉ
+cần đăng nhập, server thông báo sự hiện diện đó cho cả phòng.
 
 \paragraph{Giữ thứ tự giữa các tin nhắn (\texttt{Seq}).} Để tránh Head-of-Line blocking, nhóm cho mỗi tin nhắn
 đi trên một stream riêng (\cref{sec:hol}). Tuy nhiên, hệ quả tất yếu là nếu gói UDP chứa tin nhắn số 1 bị rớt và
@@ -237,27 +242,10 @@ trước. Để người dùng vẫn đọc được hội thoại theo đúng t
 Đối với truyền file thì không cần đi qua \fname{SeqBuffer}, vì toàn bộ một file đã nằm trong cùng một stream và
 được tầng transport ghép đúng thứ tự theo \texttt{offset}.
 
-\paragraph{Cách đánh lại \texttt{Seq} khi đi qua Server.} Phía client duy trì một biến đếm \texttt{seq} cho kết
-nối hiện tại (mỗi lần gửi tin sẽ giữ mutex để vừa lấy \fname{Endpoint} vừa tăng \texttt{seq}; nếu rớt mạng và kết
-nối lại với \texttt{conn\_id} mới thì bộ đếm đặt lại về 0). Ở chiều từ client lên server, mỗi session có một
-\fname{SeqBuffer} riêng nên các tin từ cùng một người gửi luôn được định tuyến đúng thứ tự người đó đã gõ.
-
-Tuy nhiên, ở chiều từ server đẩy xuống một client nhận (ví dụ Bob), Bob nhận tin ghép từ nhiều nguồn khác nhau
-(tin của Alice, của Carol, cùng các bản tin \texttt{users} hay \texttt{error} do chính server phát ra), nên không
-thể giữ nguyên số \texttt{Seq} gốc của từng người gửi. Do đó, goroutine \fname{writeLoop} của mỗi session người
-nhận sẽ tự đánh lại \texttt{Seq} = 1, 2, 3\dots{} theo một dãy số riêng của phiên người nhận đó ngay trước khi
-gọi \texttt{SendMessage}.
-
-Một chi tiết quan trọng khi cài đặt là hàng đợi \texttt{sendCh} (4096 chỗ) của mỗi session được đẩy vào theo kiểu
-không chặn (\texttt{select} có nhánh \texttt{default}), nhờ đó goroutine đang định tuyến của người gửi không bao giờ
-bị kẹt lại vì một người nhận đọc chậm. Khi hàng đợi này đầy, server \emph{không chọn cách bỏ tin}: bởi bỏ tin đồng
-nghĩa với việc làm mất dữ liệu (trái với yêu cầu truyền tin cậy) và để lại khoảng trống \texttt{Seq} khiến
-\fname{SeqBuffer} phía client đứng chờ mãi. Thay vào đó, việc hàng đợi 4096 tin bị đầy cho thấy client đó đã ngưng
-đọc trong một thời gian dài, nên server chủ động ngắt kết nối của riêng client chậm đó (chỉ thực hiện một lần và ghi
-log); phía client sau đó sẽ tự động kết nối lại và nhận danh sách user mới (được kiểm tra qua test
-\fname{TestSlowReceiverIsDisconnected}). Nhóm cũng viết test \fname{TestSeqReorderedAndRenumbered} giả lập việc gửi
-các gói có \texttt{Seq} 2, 3 rồi mới tới 1 để xác nhận người nhận cuối cùng vẫn nhận đúng thứ tự 1, 2, 3 với dãy số
-\texttt{Seq} liên tiếp do server cấp.
+\paragraph{Đánh lại \texttt{Seq} khi đi qua server.} Người nhận (ví dụ Bob) nhận tin trộn từ nhiều nguồn
+(Alice, Carol, bản tin \texttt{users} của server) nên không giữ được \texttt{Seq} gốc. Vì vậy \fname{writeLoop} của
+session người nhận đánh lại \texttt{Seq} = 1, 2, 3\dots{} theo dãy riêng của Bob ngay trước khi gửi
+(\fname{TestSeqReorderedAndRenumbered}).
 
 \subsection{State diagram}
 \label{subsec:state}

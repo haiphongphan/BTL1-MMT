@@ -19,6 +19,10 @@
     "salt": "s3cr3t3",
     "hash": "e583bcb01b74c17f896904bf3ec0ab3fed06a1eb60f7583b83de473a36eca205"
   },
+  "nghia": {
+    "salt": "30e018382caadd36",
+    "hash": "60669329d34c59f91fcf1585a64093d004b756494a9f2cc60398e90f547d61dd"
+  },
   "phan": {
     "salt": "s3cr3t2",
     "hash": "ddc202558db87918bf92da829b4795584acb486d8691e6d2c215d815e5a7dcaf"
@@ -26,6 +30,10 @@
   "phong": {
     "salt": "s3cr3t1",
     "hash": "21cfbf713aa9e95176896a3afd4f195af7edcc622575357eb38559e9aba6415f"
+  },
+  "phonghp": {
+    "salt": "5e76f57f3444fa12",
+    "hash": "d4d256478b092c1200e6391c6788729c5703faa9ef8efa20bc821fde979e03a7"
   },
   "user1": {
     "salt": "7587b29f689c0f75",

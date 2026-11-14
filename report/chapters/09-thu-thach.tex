@@ -1,162 +1,47 @@
+\clearpage
 \section{Thử thách và cách giải quyết}
 \label{sec:thu-thach}
 
-Trong quá trình cài đặt từ những dòng socket đầu tiên cho tới khi ghép toàn bộ hệ thống, nhóm đã vấp phải khá
-nhiều bug mà lúc chỉ vẽ thiết kế trên giấy hoặc chạy thử vài gói trên loopback không hề thấy. Đa số các lỗi khó
-đều chỉ bộc lộ khi nhóm đưa vào chạy tải nặng trên bộ giả lập mạng có rớt gói và độ trễ cao. Chương này ghi lại
-những vấn đề đáng nhớ nhất ở cả hai tầng cùng cách nhóm tìm nguyên nhân và xử lý.
+Dưới đây là những vấn đề đáng nhớ nhất ở mỗi tầng.
 
 \subsection{Tầng giao thức và transport}
-\begin{enumerate}[label=\textbf{\arabic*.}, ref=\arabic*, leftmargin=*, itemsep=4pt]
-  \item \label{tt:cubic-cham}\textbf{Tốc độ truyền với CUBIC bị tụt tới 280 lần khi bật loss 10\%.} Khi in log giá
-        trị \texttt{cwnd} ra kiểm tra, nhóm thấy cửa sổ gần như luôn bị ghim ở mức sàn 2 gói. Với chỉ 2 gói được
-        phép bay trên mạng cùng lúc, bên gửi không bao giờ nhận được đủ 3 gói đi sau vượt mặt để kích hoạt truyền
-        lại nhanh, dẫn tới mọi lần rớt gói đều phải chờ hết bộ hẹn giờ RTO. Tệ hơn nữa, lúc đầu nhóm đặt
-        RTO tối thiểu bằng 200 ms theo thói quen của TCP trong khi RTT thực trên loopback chỉ khoảng 0,4 ms.
-        \emph{Cách giải quyết:} nhóm bổ sung thêm điều kiện phát hiện mất gói theo ngưỡng thời gian (sau
-        $\tfrac98\,\text{RTT}$ kể từ lúc gửi nếu đã có gói đi sau được ACK), đồng thời chuyển sang công thức PTO
-        của QUIC \cite{rfc9002} và bỏ mức sàn 200 ms do bên nhận của nhóm luôn trả ACK ngay lập tức (\cref{subsec:mat-goi}).
-  \item \label{tt:jitter}\textbf{Có tới 89\% số gói bị báo mất nhầm dù cấu hình \texttt{loss = 0\%}.} Khi mới bật
-        thử tham số \texttt{Jitter}, nhóm thấy bộ đếm gói truyền lại tăng vọt dù không hề bật rớt gói. Kiểm tra
-        kỹ thì lỗi nằm ở chính bộ giả lập \fname{LossyConn} chứ không phải ở giao thức: bản đầu tiên của nhóm dùng
-        \fname{time.AfterFunc} hẹn giờ gửi riêng rẽ cho từng gói với độ trễ ngẫu nhiên, vô tình biến đường truyền
-        thành đảo thứ tự gói hàng loạt, làm quy tắc ``3 gói đi sau tới trước'' liên tục báo mất gói giả. Trong thực
-        tế, các gói đi qua cùng một hàng đợi router vẫn giữ thứ tự FIFO. \emph{Cách giải quyết:} nhóm sửa lại bộ
-        giả lập jitter đẩy gói qua một hàng đợi FIFO chung, sau đó tỉ lệ báo mất nhầm giảm từ 89\% xuống chỉ còn
-        0,1--0,2\%. Đây là bài học lớn cho nhóm về việc phải viết unit test kiểm tra cả công cụ test trước khi tin
-        vào số liệu đo.
-  \item \label{tt:ping-dau}\textbf{Client vừa kết nối xong bị ``treo'' 2--4 giây đầu nếu mạng có rớt gói.} Do
-        server chỉ học được địa chỉ IP:port UDP của client khi nhận được gói UDP đầu tiên từ client gửi lên, nếu
-        chẳng may gói PING mở màn này bị rớt trên đường truyền thì server hoàn toàn không biết gửi dữ liệu cho
-        client về địa chỉ nào, phải đợi tới chu kỳ keep-alive 2 giây sau mới có gói PING tiếp theo. \emph{Cách
-        giải quyết:} khi mới mở kết nối và chưa nhận được gói nào từ server, client chủ động gửi lại gói PING đầu
-        tiên theo chu kỳ ngắn 200, 400, 800 ms\dots{} (tương tự cơ chế truyền lại gói Initial trong QUIC \cite{rfc9002}). Nhờ vậy
-        thời gian hoàn tất truyền một file 1 KB trên mạng loss 10\% giảm từ 2--4 giây xuống dưới 0,6 giây.
-  \item \label{tt:cpu}\textbf{Tiến trình server ngốn 43\% CPU dù 20 client đang đứng im không gửi gì.} Khi chạy
-        thử tải 20 client ở trạng thái rảnh, nhóm bật \texttt{pprof} lên xem thì thấy phần lớn thời gian CPU nằm ở
-        \texttt{futex} và \texttt{findRunnable} của runtime Go. Nguyên nhân là mỗi kết nối đều giữ một
-        \fname{time.Ticker} gõ đều đặn mỗi 10 ms bất kể có dữ liệu hay không, khiến bộ lập lịch goroutine bị đánh
-        thức hàng nghìn lần mỗi giây. \emph{Cách giải quyết:} nhóm đổi sang cơ chế hai tốc độ: \texttt{ticker} chỉ
-        chạy ở chu kỳ 10 ms khi bảng \texttt{unacked} đang có gói chờ ACK, còn khi đã ACK hết thì tự giãn ra
-        100 ms (vì các tác vụ lúc rảnh như keep-alive 2 s hay idle timeout 10 s không cần độ phân giải tới 10 ms).
-        Sau khi sửa, mức chiếm dụng CPU lúc rảnh giảm xuống còn 3,1\% mà không ảnh hưởng tới thông lượng.
-  \item \textbf{Đồ thị \texttt{cwnd} của CUBIC lúc đầu có dạng răng cưa tuyến tính giống hệt Reno.} Khi xuất dữ
-        liệu ra vẽ đồ thị \cref{fig:cwnd} lần đầu, nhóm phát hiện các đoạn tăng cửa sổ hoàn toàn thẳng chứ không
-        có đoạn đi ngang bậc ba quanh $W_\text{max}$. Lý do là trên mạng có RTT ngắn, nhánh tăng cộng tính kiểu
-        Reno đã lấn át hoàn toàn hàm bậc ba do cách nhóm viết điều kiện rẽ nhánh ban đầu chưa chuẩn. \emph{Cách
-        giải quyết:} nhóm cài đặt lại hàm \fname{OnAck} bám sát RFC~9438 \cite{rfc9438}, cập nhật song song hai biến
-        $W_\text{cubic}$ và $W_\text{est}$ rồi lấy $\max(W_\text{cubic}, W_\text{est})$, sau đó vẽ lại đồ thị
-        phóng to (\cref{fig:cwnd-zoom}) để xác nhận đường cong chữ S bậc ba.
-  \item \textbf{Tin nhắn chat hiển thị sai thứ tự dù mạng không rớt gói.} Do nhóm tách mỗi tin nhắn ra một stream
-        độc lập để tránh HoL, khi người dùng gửi liên tiếp nhiều tin ngắn thì tùy vào cách ghép gói mà stream sau
-        có thể hoàn tất và đẩy lên channel \texttt{Recv()} trước stream trước. \emph{Cách giải quyết:} nhóm bổ sung
-        trường số thứ tự \texttt{Seq} ở bản tin tầng ứng dụng và đặt bộ đệm \fname{SeqBuffer} để sắp lại đúng thứ
-        tự gửi, nhờ đó vừa giữ được tính chất không HoL giữa file với chat ở tầng transport, vừa đảm bảo thứ tự
-        hội thoại cho người dùng (\cref{subsec:app}).
-  \item \label{tt:nonce}\textbf{Trùng lặp nonce AES-GCM giữa chiều gửi của client và chiều gửi của server.} Ở
-        phiên bản đầu, cả hai phía cùng dùng khóa $k_\text{udp}$, cùng khởi tạo \texttt{packet\_num = 0} và ghép
-        nonce chỉ từ \texttt{(conn\_id, packet\_num)}, dẫn tới gói số $n$ từ client gửi lên và gói số $n$ từ
-        server gửi xuống dùng chung một cặp (khóa, nonce). \emph{Cách giải quyết:} nhóm đưa thêm 1 byte định danh
-        chiều truyền (\texttt{0} cho C$\to$S, \texttt{1} cho S$\to$C) vào byte thứ 9 của nonce và viết unit test
-        kiểm tra chéo (\cref{sec:bao-mat}).
-  \item \textbf{Nhập nhằng mẫu đo RTT khi gói bị truyền lại.} Trong bài toán kinh điển của TCP, khi một segment
-        phải truyền lại thì lúc nhận ACK về sẽ không phân biệt được ACK đó trả lời cho lần gửi gốc hay lần gửi
-        lại. \emph{Cách giải quyết:} nhóm áp dụng triệt để nguyên tắc của QUIC \cite{rfc9002} là không bao giờ tái sử dụng
-        \texttt{packet\_num}; mỗi gói truyền lại đều mang số \texttt{packet\_num} mới và ghi nhận mốc thời gian
-        gửi mới, nên phép đo RTT luôn chính xác mà không cần tới thuật toán Karn \cite{rfc6298}.
-  \item \textbf{Ghi vào stream của kết nối đã đóng nhưng hàm \texttt{Write} vẫn báo thành công.} Trong câu lệnh
-        \fname{select} của Go, nếu nhánh đẩy dữ liệu vào channel (vẫn còn chỗ trống trong buffer) và nhánh
-        \texttt{<-c.done} cùng thỏa mãn tại một thời điểm, runtime Go sẽ chọn ngẫu nhiên một trong hai nhánh.
-        \emph{Cách giải quyết:} nhóm thêm một bước kiểm tra nhanh \texttt{select \{ case <-c.done: return err;
-        default: \}} ngay ở đầu hàm trước khi thực hiện \fname{select} ghi vào channel.
-  \item \textbf{Vòng lặp ACK vô tận và phân mảnh gói IP.} Ở bản thử nghiệm đầu tiên, hễ nhận được gói UDP nào là
-        bên nhận lại đánh dấu cần gửi ACK, khiến gói chỉ chứa ACK cũng kích hoạt một gói ACK trả lời ngược lại
-        mãi không dứt. \emph{Cách giải quyết:} nhóm quy định chỉ bật cờ \texttt{needAck} khi trong gói nhận được có
-        ít nhất một frame STREAM hoặc PING, đồng thời khóa trần kích thước gói ở mức 1200 byte để tránh phân mảnh
-        IP.
-  \item \textbf{Data race giữa luồng đọc socket và luồng của ứng dụng.} Khi chạy \fname{go test -race} ở những bản
-        đầu, trình kiểm tra báo xung đột bộ nhớ khi goroutine ứng dụng đọc thông số kết nối cùng lúc goroutine nhận
-        gói đang cập nhật state. \emph{Cách giải quyết:} nhóm chuyển hẳn sang kiến trúc một goroutine
-        \fname{run()} duy nhất sở hữu toàn bộ state của \fname{Conn} và chỉ trao đổi với bên ngoài qua channel
-        (\cref{subsec:concurrency}).
+\begin{enumerate}[label=\textbf{\arabic*.}, ref=\arabic*, leftmargin=*, itemsep=2pt]
+  \item \label{tt:ping-dau}\textbf{Client ``treo'' 2--4 giây đầu khi mạng có mất gói.} Server chỉ biết địa chỉ
+        UDP của client khi nhận được gói UDP đầu tiên từ client. Nếu gói PING mở đầu bị mất, server không biết gửi
+        dữ liệu về đâu và phải đợi chu kỳ keep-alive 2 s sau mới có PING tiếp theo. \emph{Cách giải quyết:} khi
+        chưa nhận được gói nào từ server, client gửi lại PING đầu sau 200, 400, 800 ms\dots{} (tương tự gói
+        Initial của QUIC \cite{rfc9002}). Thời gian gửi xong file 1 KB khi loss 10\% giảm từ 2--4 s xuống dưới
+        0,6 s.
+  \item \label{tt:nonce}\textbf{Trùng nonce AES-GCM giữa hai chiều truyền.} Nonce được ghép từ header để khỏi
+        gửi kèm. Bản đầu chỉ dùng \texttt{(conn\_id, packet\_num)}, mà hai phía dùng chung khóa
+        $k_\text{udp}$ và cùng đếm \texttt{packet\_num} từ 0, nên gói số $n$ của client và gói số $n$ của server
+        có cùng (khóa, nonce). Với GCM, khi đó XOR hai bản mã sẽ ra XOR hai bản rõ, và tag có thể bị làm giả
+        \cite{gcm}. \emph{Cách giải quyết:}
+        thêm 1 byte chiều truyền vào nonce (\texttt{0}: C$\to$S, \texttt{1}: S$\to$C), kèm unit test kiểm tra chéo
+        (\cref{sec:bao-mat}).
 \end{enumerate}
+Phân mảnh IP được tránh ngay từ thiết kế: mọi gói $\le$ 1200 byte (dưới MTU tối thiểu 1280 của IPv6); dữ liệu lớn
+do transport tự chia thành frame $\le$ 1000 byte và ghép lại theo \texttt{offset} (\cref{subsec:goi}).
 
 \subsection{Tầng ứng dụng}
-\begin{enumerate}[label=\textbf{\arabic*.}, leftmargin=*, itemsep=4pt]
-  \item \textbf{Tin nhắn đến người nhận bị đảo thứ tự do gọi \texttt{go Send()} tràn lan.} Ban đầu, để vòng lặp
-        đọc của server không bị chặn khi broadcast tin nhắn cho nhiều người, nhóm tạo một goroutine mới cho mỗi
-        lần gửi (\texttt{go session.Send(msg)}). Vì bộ lập lịch của Go không đảm bảo goroutine nào tạo trước sẽ
-        chạy trước, khi gửi 20 tin liên tiếp thì phía nhận thường xuyên thấy tin số 2 hiện lên trước tin số 1 ngay
-        cả khi mạng không mất gói nào. \emph{Cách giải quyết:} mỗi session được cấp một hàng đợi \texttt{sendCh}
-        riêng và chỉ có duy nhất một goroutine \fname{writeLoop} lấy tin ra gọi \texttt{SendMessage} tuần tự, kèm
-        test tự động gửi 20 tin liên tiếp để kiểm tra thứ tự.
-  \item \textbf{Một người nhận đọc chậm hoặc bị treo làm kẹt toàn bộ việc định tuyến trên server.} Nếu server vừa
-        giữ khóa \fname{Registry} vừa gọi hàm gửi mạng, hoặc đẩy vào channel \texttt{sendCh} theo kiểu chặn
-        (blocking), chỉ cần một client bị đơ (làm cửa sổ nhận về 0 và \texttt{sendCh} đầy) là goroutine định tuyến
-        của người gửi sẽ bị treo theo, kéo sập cả phòng chat. Ở phiên bản đầu, nhóm thử sửa bằng cách bỏ qua tin mới
-        khi hàng đợi đầy, nhưng cách này làm mất tin nhắn một cách lặng lẽ và để lại khoảng trống \texttt{Seq} khiến
-        \fname{SeqBuffer} ở client đứng chờ. \emph{Cách giải quyết:} server chỉ giữ khóa \fname{Registry} để chép
-        nhanh danh sách con trỏ session ra ngoài (\fname{Snapshot}) rồi nhả khóa ngay trước khi gửi; thao tác đẩy
-        vào \texttt{sendCh} (4096 tin) dùng \texttt{select} có nhánh \texttt{default}, và nếu hàng đợi của client
-        nào bị đầy tràn thì server chủ động ngắt kết nối của riêng client quá chậm đó để client tự kết nối lại
-        (\cref{subsec:app}).
-  \item \textbf{Lọt hai phiên trùng username khi hai client đăng nhập cùng lúc.} Ban đầu nhóm viết hai bước tách
-        rời: gọi \fname{GetByName} để kiểm tra xem tên đó đã online chưa, nếu chưa thì mới gọi hàm thêm vào
-        \fname{Registry}. Khi test thử trường hợp hai client dùng cùng một tài khoản gửi bản tin \texttt{AUTH}
-        đồng thời, cả hai goroutine đều đi qua bước kiểm tra trước khi bên kia kịp ghi vào map. \emph{Cách giải
-        quyết:} nhóm gộp bước kiểm tra và bước đăng ký vào chung một hàm nguyên tử \fname{AddPending} dưới cùng
-        một lần giữ \texttt{Lock()}, trả về lỗi \texttt{ErrAlreadyOnline} ngay nếu tên đó đã tồn tại.
-  \item \textbf{Xóa nhầm phiên mới khi người dùng rớt mạng rồi kết nối lại nhanh.} Trước đây hàm dọn dẹp
-        \fname{dropSession} chỉ xóa theo chuỗi \texttt{username}. Khi một client bị rớt mạng (server chưa hết 10 s
-        idle timeout) và người dùng khởi động lại client để đăng nhập phiên mới, một lát sau kết nối cũ hết
-        timeout mới gọi hàm xóa theo tên và xóa mất luôn phiên mới vừa tạo, biến client mới thành trạng thái
-        ``bóng ma'' (vẫn nhận được tin nhưng biến mất khỏi danh sách online). \emph{Cách giải quyết:} hàm
-        \fname{Registry.Remove(s *Session)} so sánh trực tiếp con trỏ \fname{Session} và chỉ xóa khỏi map nếu con
-        trỏ đang lưu vẫn đúng là phiên \texttt{s} hiện tại của tên đó, đồng thời thiết kế idempotent để gọi từ nhiều
-        nơi (khi vòng đọc thoát, khi \texttt{Done()} đóng, hoặc khi gặp lỗi ghi) mà không gây tác dụng phụ.
-  \item \textbf{Phiên pending bị treo vĩnh viễn nếu client mất mạng ngay sau \texttt{AUTH\_OK}.} Nếu một
-        client hoàn tất handshake TCP nhưng chưa kịp gửi gói UDP nào đã bị mất kết nối, phiên \textsc{Pending} sẽ
-        giữ tên tài khoản đó ở trạng thái đang online mãi mãi khiến chính người đó không thể đăng nhập lại. Lúc đầu
-        nhóm định viết thêm một goroutine quét dọn timer riêng cho các phiên pending; \emph{cách giải quyết} gọn
-        hơn là gọi \fname{Mux.Accept} tạo sẵn đối tượng \fname{transport.Conn} ngay từ lúc trả \texttt{AUTH\_OK}:
-        khi đó nếu sau 10 giây không có gói UDP nào tới thì chính cơ chế idle timeout có sẵn của tầng transport sẽ
-        tự đóng kết nối và kích hoạt dọn dẹp session mà không tốn thêm bộ hẹn giờ mới.
-  \item \textbf{Chuyển tiếp file kích thước lớn qua server mà không làm tràn RAM.} Với kịch bản 20 client gửi file
-        200 MB cho nhau, nếu server gom toàn bộ file vào bộ nhớ rồi mới gửi tiếp cho người nhận thì server sẽ nhanh
-        chóng cạn RAM. \emph{Cách giải quyết:} nhóm thiết kế cơ chế chuyển tiếp kiểu pipeline: ngay khi
-        \fname{FileHeaderParser} gom và tách xong phần JSON metadata ở đầu stream (xử lý được cả trường hợp JSON bị
-        cắt ngang giữa hai mảnh \fname{Delivery} đầu tiên), server mở ngay một stream hướng tới người nhận và đẩy
-        từng mảnh dữ liệu qua một channel đệm 256 phần tử cho goroutine \fname{relayFile}. Khi người nhận đọc chậm
-        làm channel này đầy, vòng đọc phía người gửi sẽ bị chặn lại và cơ chế điều khiển luồng của tầng transport sẽ
-        tự động điều tiết bên gửi chậm theo.
-  \item \textbf{Tự động kết nối lại và đóng kết nối gọn khi bấm Ctrl+C.} Khi channel \texttt{Done()} đóng mà không
-        phải do người dùng chủ động thoát, client chuyển sang trạng thái \textsc{Reconnecting} với thời gian chờ
-        backoff tăng dần 1, 2, 4\dots{} tới tối đa 30 s (nếu trong 10 s đầu server chưa kịp dọn phiên cũ và trả về
-        \texttt{AUTH\_FAIL} báo đang online thì các lần thử kế tiếp sẽ tự vào lại được). Ngoài ra, ở các bản đầu khi
-        bấm Ctrl+C để tắt, tiến trình bị dừng ngay mà không kịp gửi frame \texttt{CLOSE} nên những người khác phải
-        chờ hết 10 s mới thấy danh sách online cập nhật. \emph{Cách giải quyết:} nhóm bắt tín hiệu
-        \texttt{SIGINT}/\texttt{SIGTERM} ở cả client lẫn server (phía server đóng \fname{Mux} để phát \texttt{CLOSE}
-        cho toàn bộ client đang kết nối) trước khi thoát, rút ngắn thời gian cập nhật trạng thái xuống chỉ còn
-        0,05--0,2 giây (\cref{tab:he-thong}).
-  \item \textbf{Tự động tìm server trong mạng LAN.} Ở phiên bản đầu, gói UDP broadcast ghi cứng cổng 9000 kèm địa
-        chỉ IP do server tự đoán (dẫn tới lấy sai IP khi máy chạy server có nhiều card mạng ảo). \emph{Cách giải
-        quyết:} server phát đúng số cổng TCP thực tế đang lắng nghe, còn phía client lấy IP của server trực tiếp từ
-        địa chỉ nguồn của gói UDP broadcast nhận được. Bên cạnh đó, để nhiều tiến trình client trên cùng một máy có
-        thể cùng lắng nghe cổng 9002 mà không bị lỗi trùng bind ở tiến trình thứ hai, nhóm bật tùy chọn
-        \texttt{SO\_REUSEADDR}/\texttt{SO\_REUSEPORT} trên socket (tách file cài đặt riêng cho Windows và Unix thông
-        qua build tag).
-  \item \textbf{Cờ giả lập mạng được truyền vào nhưng không có tác dụng.} Ở một phiên bản thử nghiệm, cờ dòng lệnh
-        \texttt{-jitter} đã được hàm \texttt{main} đọc vào nhưng lại quên gán xuống cấu hình của \fname{LossyConn};
-        lỗi này chỉ lộ ra khi nhóm kiểm tra thấy RTT đo được vẫn giữ nguyên ở mức 0,1 ms. \emph{Cách giải quyết:}
-        nhóm nối lại đầy đủ các tham số cấu hình và rút ra bài học tương tự thử thách~\ref{tt:jitter}: luôn phải
-        kiểm tra bộ giả lập bằng số đo thực tế (RTT, tỉ lệ mất gói) trước khi tin vào kết quả đo.
-  \item \textbf{Tự cài đặt HTTP server cho Web UI khi không được dùng \fname{net/http}.} Vì phải làm việc trực tiếp
-        trên socket TCP, nhóm tự xử lý việc đọc request line và từng dòng header, dùng \texttt{io.LimitReader} theo
-        đúng \texttt{Content-Length} cho cả request JSON nhỏ lẫn file upload hàng trăm MB (phần body của file được
-        stream thẳng từ socket ra file tạm trên đĩa chứ không đọc dồn vào RAM), đồng thời trả header
-        \texttt{Connection: close} để đơn giản hóa vòng đời kết nối HTTP. Trên trình duyệt, do server không gửi dội
-        lại tin nhắn về cho chính người gửi nên phía JS tự hiển thị tin ngay khi bấm gửi; toàn bộ nội dung chat từ
-        người khác gửi tới đều đi qua hàm escape ký tự HTML trước khi chèn vào DOM để chống lỗi XSS; ngoài ra khi
-        chạy client ở chế độ nền (\texttt{< /dev/null}), dù luồng đọc \texttt{stdin} chạm \texttt{EOF} ngay lập tức
-        nhưng tiến trình vẫn được giữ hoạt động chừng nào Web UI còn đang chạy.
+\begin{enumerate}[label=\textbf{\arabic*.}, leftmargin=*, itemsep=2pt, resume]
+  \item \textbf{Tin nhắn tới sai thứ tự dù mạng không mất gói.} Để vòng đọc của server không bị chặn khi
+        broadcast, bản đầu gọi \texttt{go session.Send(msg)} cho mỗi tin. Go không đảm bảo goroutine tạo trước
+        chạy trước, nên khi gửi 20 tin liên tiếp, người nhận thường thấy tin 2 hiện trước tin 1. \emph{Cách giải
+        quyết:} mỗi session có một hàng đợi \texttt{sendCh} và đúng một goroutine \fname{writeLoop} gửi tuần tự.
+  \item \textbf{Treo dây chuyền (deadlock): một client chậm làm kẹt cả phòng chat.} Nếu server vừa giữ khóa \fname{Registry} vừa gửi mạng,
+        hoặc đẩy vào \texttt{sendCh} kiểu chặn, chỉ cần một client bị đơ (cửa sổ nhận về 0, \texttt{sendCh} đầy)
+        là goroutine định tuyến của người gửi treo theo. \emph{Cách giải quyết:} chỉ giữ
+        khóa để chép danh sách session (\fname{Snapshot}) rồi nhả ngay trước khi gửi; đẩy vào \texttt{sendCh}
+        (4096 tin) bằng \texttt{select} có \texttt{default}, hàng của client nào tràn thì ngắt riêng client đó để
+        nó tự kết nối lại (\cref{subsec:app}).
+  \item \textbf{Đăng nhập lại nhanh bị xóa mất phiên mới.} Hàm dọn dẹp ban đầu xóa session theo
+        \texttt{username}. Khi client rớt mạng rồi đăng nhập lại trước khi phiên cũ hết idle timeout 10 s, lúc phiên
+        cũ hết hạn nó xóa nhầm phiên mới. Client mới thành ``bóng ma'': vẫn nhận được tin nhưng biến mất khỏi
+        danh sách online. \emph{Cách giải quyết:} \fname{Registry.Remove(s *Session)} so sánh con trỏ và chỉ xóa nếu
+        map vẫn đang trỏ đúng tới \texttt{s}.
 \end{enumerate}
+
+\paragraph{Bài học rút ra.} Loopback gần như không mất gói, nên phần lớn lỗi trên chỉ lộ ra khi chủ động chạy dưới
+mất gói, độ trễ và nhiều client cùng lúc; bản thân bộ giả lập cũng phải được test (một lỗi trong nó từng làm 89\%
+gói bị báo mất nhầm). Để tránh deadlock, nhóm giữ một quy tắc: không bao giờ giữ khóa hay chờ channel khi gửi mạng.
