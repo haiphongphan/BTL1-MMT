@@ -1,47 +1,41 @@
-\clearpage
 \section{Thử thách và cách giải quyết}
 \label{sec:thu-thach}
 
-Dưới đây là những vấn đề đáng nhớ nhất ở mỗi tầng.
-
 \subsection{Tầng giao thức và transport}
 \begin{enumerate}[label=\textbf{\arabic*.}, ref=\arabic*, leftmargin=*, itemsep=2pt]
-  \item \label{tt:ping-dau}\textbf{Client ``treo'' 2--4 giây đầu khi mạng có mất gói.} Server chỉ biết địa chỉ
-        UDP của client khi nhận được gói UDP đầu tiên từ client. Nếu gói PING mở đầu bị mất, server không biết gửi
-        dữ liệu về đâu và phải đợi chu kỳ keep-alive 2 s sau mới có PING tiếp theo. \emph{Cách giải quyết:} khi
-        chưa nhận được gói nào từ server, client gửi lại PING đầu sau 200, 400, 800 ms\dots{} (tương tự gói
-        Initial của QUIC \cite{rfc9002}). Thời gian gửi xong file 1 KB khi loss 10\% giảm từ 2--4 s xuống dưới
-        0,6 s.
-  \item \label{tt:nonce}\textbf{Trùng nonce AES-GCM giữa hai chiều truyền.} Nonce được ghép từ header để khỏi
-        gửi kèm. Bản đầu chỉ dùng \texttt{(conn\_id, packet\_num)}, mà hai phía dùng chung khóa
-        $k_\text{udp}$ và cùng đếm \texttt{packet\_num} từ 0, nên gói số $n$ của client và gói số $n$ của server
-        có cùng (khóa, nonce). Với GCM, khi đó XOR hai bản mã sẽ ra XOR hai bản rõ, và tag có thể bị làm giả
-        \cite{gcm}. \emph{Cách giải quyết:}
-        thêm 1 byte chiều truyền vào nonce (\texttt{0}: C$\to$S, \texttt{1}: S$\to$C), kèm unit test kiểm tra chéo
-        (\cref{sec:bao-mat}).
+  \item \label{tt:ping-dau}\textbf{Trễ 2--4 giây đầu phiên khi gói PING mở đầu bị rớt.} Server chỉ biết địa chỉ
+        UDP của client khi nhận được gói UDP đầu tiên từ client; nếu gói PING mở đầu bị mất, server chưa có địa chỉ
+        đích để gửi dữ liệu và phải đợi chu kỳ keep-alive 2 s sau mới có PING tiếp theo. \emph{Xử lý:} khi chưa nhận
+        được gói nào từ server, client gửi lại PING đầu sau 200, 400, 800 ms\dots{} (tương tự gói Initial của QUIC
+        \cite{rfc9002}), giảm thời gian gửi xong file 1 KB ở mức loss 10\% từ 2--4 s xuống dưới 0,6 s.
+  \item \textbf{ACK cũ tới muộn ghi đè cửa sổ nhận mới, và bên gửi bị đứng khi cửa sổ vừa mở lại.} Mỗi ACK mang
+        trường \texttt{Window} (flow control). Mạng có thể giao ACK sai thứ tự, nên nếu cứ nhận \texttt{Window} của
+        ACK tới sau cùng thì giá trị cũ (nhỏ) ghi đè giá trị mới (lớn), làm bên gửi bị chặn oan, hoặc ngược lại gửi
+        quá tay. Ngoài ra, khi cửa sổ gần về 0 bên gửi dừng hẳn và không còn gói nào để kích hoạt ACK mới; nếu bên nhận
+        im lặng thì phải đợi PING keep-alive kế tiếp (2 s). \emph{Xử lý:} bên gửi chỉ nhận \texttt{Window} khi
+        \texttt{Ranges[0].End} $\ge$ \texttt{winAckPN} (packet\_num lớn nhất của ACK đã cập nhật cửa sổ); bên nhận gọi
+        \fname{maybeWindowUpdate} gửi ngay một ACK khi cửa sổ vừa mở lại từ dưới 1/4 lên từ 1/2 bộ đệm trở lên.
+  \item \textbf{Client đổi mạng (Wi-Fi sang 4G) nhưng không để gói cũ hay gói giả kéo kết nối về địa chỉ sai.}
+        Server phân kênh theo \texttt{conn\_id} thay vì IP:port nên client đổi địa chỉ vẫn giữ được kết nối, nhưng
+        nếu cập nhật địa chỉ đích theo mọi gói nhận được thì một gói cũ tới muộn (hoặc gói bị kẻ xấu phát lại từ địa
+        chỉ khác) sẽ kéo dữ liệu gửi đi về địa chỉ sai. \emph{Xử lý:} chỉ cập nhật \texttt{peer} khi gói đã qua xác
+        thực AES-GCM, là gói mới (chưa nhận trước đó) và có \texttt{packet\_num} lớn nhất từng nhận.
 \end{enumerate}
-Phân mảnh IP được tránh ngay từ thiết kế: mọi gói $\le$ 1200 byte (dưới MTU tối thiểu 1280 của IPv6); dữ liệu lớn
-do transport tự chia thành frame $\le$ 1000 byte và ghép lại theo \texttt{offset} (\cref{subsec:goi}).
-
 \subsection{Tầng ứng dụng}
 \begin{enumerate}[label=\textbf{\arabic*.}, leftmargin=*, itemsep=2pt, resume]
-  \item \textbf{Tin nhắn tới sai thứ tự dù mạng không mất gói.} Để vòng đọc của server không bị chặn khi
-        broadcast, bản đầu gọi \texttt{go session.Send(msg)} cho mỗi tin. Go không đảm bảo goroutine tạo trước
-        chạy trước, nên khi gửi 20 tin liên tiếp, người nhận thường thấy tin 2 hiện trước tin 1. \emph{Cách giải
-        quyết:} mỗi session có một hàng đợi \texttt{sendCh} và đúng một goroutine \fname{writeLoop} gửi tuần tự.
-  \item \textbf{Treo dây chuyền (deadlock): một client chậm làm kẹt cả phòng chat.} Nếu server vừa giữ khóa \fname{Registry} vừa gửi mạng,
-        hoặc đẩy vào \texttt{sendCh} kiểu chặn, chỉ cần một client bị đơ (cửa sổ nhận về 0, \texttt{sendCh} đầy)
-        là goroutine định tuyến của người gửi treo theo. \emph{Cách giải quyết:} chỉ giữ
-        khóa để chép danh sách session (\fname{Snapshot}) rồi nhả ngay trước khi gửi; đẩy vào \texttt{sendCh}
-        (4096 tin) bằng \texttt{select} có \texttt{default}, hàng của client nào tràn thì ngắt riêng client đó để
-        nó tự kết nối lại (\cref{subsec:app}).
-  \item \textbf{Đăng nhập lại nhanh bị xóa mất phiên mới.} Hàm dọn dẹp ban đầu xóa session theo
-        \texttt{username}. Khi client rớt mạng rồi đăng nhập lại trước khi phiên cũ hết idle timeout 10 s, lúc phiên
-        cũ hết hạn nó xóa nhầm phiên mới. Client mới thành ``bóng ma'': vẫn nhận được tin nhưng biến mất khỏi
-        danh sách online. \emph{Cách giải quyết:} \fname{Registry.Remove(s *Session)} so sánh con trỏ và chỉ xóa nếu
-        map vẫn đang trỏ đúng tới \texttt{s}.
+  \item \textbf{Tin nhắn tới sai thứ tự dù mạng không mất gói.} Để vòng đọc của server không bị chặn khi broadcast,
+        phiên bản đầu gọi \texttt{go session.Send(msg)} cho từng tin. Vì Go scheduler không đảm bảo goroutine tạo
+        trước chạy trước nên khi gửi 20 tin liên tiếp, tin số 2 thường tới trước tin số 1. \emph{Xử lý:} mỗi session
+        dùng một hàng đợi \texttt{sendCh} và một goroutine \fname{writeLoop} duy nhất để phát tuần tự.
+  \item \textbf{Deadlock khi một client nhận chậm làm kẹt cả phòng chat.} Nếu server vừa giữ khóa \fname{Registry}
+        vừa gọi hàm gửi mạng, hoặc đẩy vào \texttt{sendCh} theo kiểu blocking, chỉ cần một client ngừng đọc
+        (cửa sổ nhận về 0, \texttt{sendCh} đầy) là goroutine định tuyến của người gửi bị treo theo. \emph{Xử lý:}
+        chỉ giữ khóa để chép danh sách session (\fname{Snapshot}) rồi nhả khóa ngay trước khi gửi; đẩy vào
+        \texttt{sendCh} (4096 tin) bằng \texttt{select} có nhánh \texttt{default}, nếu hàng đợi của client nào đầy
+        thì đóng riêng kết nối đó để client tự kết nối lại (\cref{subsec:app}).
+  \item \textbf{Phiên cũ hết timeout xóa nhầm phiên mới khi đăng nhập lại nhanh.} Ban đầu hàm dọn dẹp xóa session
+        theo khóa \texttt{username}. Khi client rớt mạng rồi kết nối lại trước khi phiên cũ hết idle timeout 10 s,
+        lúc phiên cũ hết hạn sẽ xóa mất bản ghi của phiên mới trong \fname{Registry} khiến client mới biến mất khỏi
+        danh sách online dù vẫn nhận được tin. \emph{Xử lý:} \fname{Registry.Remove(s *Session)} so sánh con trỏ và
+        chỉ xóa khi map vẫn đang trỏ tới đúng \texttt{s}.
 \end{enumerate}
-
-\paragraph{Bài học rút ra.} Loopback gần như không mất gói, nên phần lớn lỗi trên chỉ lộ ra khi chủ động chạy dưới
-mất gói, độ trễ và nhiều client cùng lúc; bản thân bộ giả lập cũng phải được test (một lỗi trong nó từng làm 89\%
-gói bị báo mất nhầm). Để tránh deadlock, nhóm giữ một quy tắc: không bao giờ giữ khóa hay chờ channel khi gửi mạng.

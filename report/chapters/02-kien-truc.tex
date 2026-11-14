@@ -1,12 +1,7 @@
 \section{Kiến trúc hệ thống}
 \label{sec:kien-truc}
 
-Hệ thống được triển khai theo mô hình một server trung tâm và nhiều client. Vì trình duyệt web không có API để
-mở trực tiếp socket UDP thô, mỗi client được thiết kế thành một process chạy cục bộ trên máy người dùng. Trình
-duyệt chỉ giao tiếp với process client này qua HTTP trên \texttt{127.0.0.1}, còn toàn bộ dữ liệu đi ra mạng LAN
-giữa client và server đều đi qua kênh UDP đã mã hóa (ngoại trừ bước handshake ban đầu dùng TCP để trao đổi khóa
-và đăng nhập). \Cref{fig:tong-quan} cho thấy cách các client và server tương tác qua ba kênh mạng;
-\cref{fig:kien-truc} đi sâu vào các thành phần bên trong mỗi process.
+Hệ thống gồm một server trung tâm và nhiều client. Vì trình duyệt web không mở được socket UDP thô, mỗi client chạy như một process cục bộ trên máy người dùng: trình duyệt giao tiếp với process client qua HTTP trên \texttt{127.0.0.1}, còn dữ liệu đi ra mạng LAN giữa client và server đi qua kênh UDP đã mã hóa (trừ bước handshake ban đầu dùng TCP để trao đổi khóa và đăng nhập). \Cref{fig:tong-quan} minh họa ba kênh mạng giữa các client và server; \cref{fig:kien-truc} trình bày các thành phần và luồng dữ liệu bên trong mỗi process.
 
 \begin{figure}[tbp]
   \centering
@@ -55,36 +50,32 @@ và đăng nhập). \Cref{fig:tong-quan} cho thấy cách các client và server
   \label{fig:kien-truc}
 \end{figure}
 
-\paragraph{Phía Server.} Hoạt động của server được chia thành ba nhóm goroutine chính:
+\paragraph{Phía Server.} Server chia thành ba nhóm goroutine chính:
 \begin{enumerate}[label=(\arabic*), leftmargin=*, itemsep=2pt]
-  \item \fname{ListenTCP} lắng nghe kết nối trên cổng 9000; mỗi lượt handshake được xử lý trong một goroutine riêng
-        với deadline 10 giây, nhờ vậy một client bị treo giữa chừng sẽ không chiếm giữ goroutine mãi. Ngay khi xác
-        thực xong, server gọi \fname{Mux.Accept(conn\_id, $k_\text{udp}$)} để tạo sẵn đối tượng
-        \fname{transport.Conn} cho kết nối UDP sắp tới và gắn vào \fname{Session}.
-  \item Mỗi session đang hoạt động có hai goroutine chính. Goroutine \fname{serveSession} đọc dữ liệu từ
-        \texttt{Recv()} và phân loại stream theo byte đầu tiên: nếu là bản tin nhắn thì gom cho tới cờ FIN rồi đưa
-        đi định tuyến; nếu là luồng file thì đọc phần metadata ở đầu stream rồi chuyển tiếp từng mảnh sang goroutine
-        \fname{relayFile} phụ trách file đó. Ở chiều ngược lại, \fname{writeLoop} là goroutine \emph{duy nhất} được
-        phép gọi \texttt{SendMessage} cho session này, chuyên lấy tin từ hàng đợi \texttt{sendCh} (4096 phần tử) để
-        phát tuần tự, giúp giữ đúng thứ tự gửi và đảm bảo một người nhận chậm chỉ làm đầy hàng đợi của chính họ
-        (\cref{subsec:app}). Ngoài ra, một goroutine ngắn hạn \fname{watchPeer} sẽ chờ gói UDP đầu tiên của client
-        để ghi log địa chỉ IP:port thực tế và phát lại danh sách user kèm địa chỉ mới cho cả phòng.
+  \item \fname{ListenTCP} lắng nghe trên cổng 9000; mỗi lượt handshake chạy trong một goroutine riêng với deadline
+        10 giây. Ngay sau khi xác thực thành công, server gọi \fname{Mux.Accept(conn\_id, $k_\text{udp}$)} để tạo
+        đối tượng \fname{transport.Conn} cho kết nối UDP và gắn vào \fname{Session}.
+  \item Mỗi session đang hoạt động có hai goroutine dài hạn: \fname{serveSession} đọc từ \texttt{Recv()} và phân
+        loại stream theo byte đầu tiên (cắt tới cờ FIN rồi đưa đi định tuyến; luồng file được
+        tách phần metadata ở đầu rồi chuyển tiếp từng mảnh sang goroutine \fname{relayFile} của file đó). Ở chiều
+        ngược lại, \fname{writeLoop} là goroutine \emph{duy nhất} gọi \texttt{SendMessage} cho session này, lấy tin
+        tuần tự từ hàng đợi \texttt{sendCh} (4096 phần tử) để giữ thứ tự gửi và cô lập các client nhận chậm
+        (\cref{subsec:app}). Khi mới tạo phiên, một goroutine ngắn hạn \fname{watchPeer} chờ gói UDP đầu tiên của
+        client để ghi nhận địa chỉ IP:port thực tế và phát lại danh sách user kèm địa chỉ mới cho cả phòng.
   \item \fname{Mux.readLoop} đọc gói từ socket UDP chung trên cổng 9001, tra trường \texttt{conn\_id} trong header
-        rồi đẩy gói vào đúng đối tượng \fname{Conn} tương ứng; bản thân mỗi \fname{Conn} lại có một goroutine
-        \fname{run} riêng ở tầng transport.
+        để chuyển gói tới đúng đối tượng \fname{Conn}; mỗi \fname{Conn} có một goroutine \fname{run} riêng ở tầng
+        transport.
 \end{enumerate}
-Danh sách người dùng đang online được quản lý tập trung tại \fname{Registry} và bảo vệ bằng khóa \texttt{RWMutex}.
-Các phương thức của \fname{Registry} chỉ thao tác nhanh trên map rồi nhả khóa ngay; việc gửi tin luôn được thực hiện
-sau khi đã nhả khóa trên một bản sao danh sách (\fname{Snapshot}), nhờ đó không có goroutine nào bị giữ chân trong
-miền khóa vì mạng chậm.
+Danh sách người dùng online được lưu tại \fname{Registry} dưới khóa \texttt{RWMutex}. Các phương thức của
+\fname{Registry} chỉ cập nhật hoặc chép nhanh danh sách (\fname{Snapshot}) rồi nhả khóa ngay trước khi gửi mạng,
+tránh giữ khóa trong lúc I/O.
 
-\paragraph{Phía Client.} Khi khởi động với tham số \texttt{-server auto}, client lắng nghe gói UDP broadcast của
-server trên cổng 9002 (tối đa 5 giây) và lấy IP của server trực tiếp từ địa chỉ nguồn của gói tin; socket này được
-bật cờ \texttt{SO\_REUSEADDR}/\texttt{SO\_REUSEPORT} để nhiều tiến trình client trên cùng một máy có thể dò tìm
-đồng thời. Thành phần \fname{client/core} nắm giữ \fname{Endpoint} hiện tại cùng một goroutine \fname{listenLoop}
-chuyên ghép các stream nhận về, sắp xếp lại tin nhắn theo \texttt{Seq} và ghi mọi sự kiện (tin chat, DM, danh sách
-user, tiến độ truyền file, trạng thái kết nối) vào \fname{EventLog} với chỉ số tăng dần. Nếu channel \texttt{Done()}
-của kết nối đóng lại mà không phải do người dùng chủ động thoát, client sẽ tự chuyển sang trạng thái
+\paragraph{Phía Client.} Khi chạy với cờ \texttt{-server auto}, client lắng nghe gói UDP broadcast trên cổng 9002
+(tối đa 5 giây) và lấy IP server từ địa chỉ nguồn của gói tin; socket bật \texttt{SO\_REUSEADDR}/\texttt{SO\_REUSEPORT}
+để nhiều tiến trình client trên cùng máy có thể lắng nghe đồng thời. Khối \fname{client/core} giữ \fname{Endpoint}
+hiện tại cùng goroutine \fname{listenLoop} ghép các stream nhận về, sắp lại thứ tự tin nhắn theo \texttt{Seq} và
+ghi các sự kiện (chat, DM, danh sách user, tiến độ truyền file, trạng thái kết nối) vào \fname{EventLog} theo chỉ
+số tăng dần. Nếu channel \texttt{Done()} đóng mà không do người dùng thoát, client chuyển sang trạng thái
 \textsc{Reconnecting} và thực hiện handshake lại (\cref{subsec:state}).
 
 \paragraph{Giao diện.} \fname{webui} là một HTTP/1.1 server nhóm tự viết trên \fname{net.Listen} (đọc request

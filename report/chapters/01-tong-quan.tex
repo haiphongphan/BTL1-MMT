@@ -6,26 +6,24 @@
 Người dùng có thể đăng nhập, xem danh sách những người đang online, chat chung với cả phòng, nhắn
 tin riêng cho từng người và gửi file cho nhau.
 
-Yêu cầu trọng tâm và cũng là phần thử thách nhất của đề là toàn bộ dữ liệu phải truyền qua \textbf{một giao thức
-tầng ứng dụng do nhóm tự thiết kế trên nền UDP}. Vì UDP vốn chỉ gửi từng gói tin rời rạc, không đảm
-bảo gói tới đích và cũng không giữ thứ tự, nhóm cần tự xây dựng thêm các cơ chế ở tầng trên để đáp ứng:
+Theo yêu cầu của đề, toàn bộ dữ liệu phải truyền qua \textbf{một giao thức tầng ứng dụng tự thiết kế trên nền UDP}. Do UDP không đảm bảo gói tin tới đích hay giữ đúng thứ tự, tầng giao thức này cần tự cài đặt:
 \begin{itemize}
   \item Truyền dữ liệu tin cậy và đúng thứ tự.
-  \item Flow control -- tránh gửi nhanh hơn khả năng xử lý của bên nhận và Congestion control -- điều chỉnh tốc độ gửi theo tình trạng đường truyền, cài đặt thuật toán CUBIC \cite{rfc9438}.
+  \item Flow control theo khả năng nhận của đối tác và congestion control bằng thuật toán CUBIC \cite{rfc9438}.
   \item Mã hóa và xác thực dữ liệu trên đường truyền.
-  \item Loại bỏ \emph{Head-of-Line blocking} (HoL), tức là khi đang truyền một file lớn thì các tin nhắn chat gửi xen kẽ không bị kẹt lại chờ file truyền xong.
+  \item Loại bỏ \emph{Head-of-Line blocking} (HoL) để các tin nhắn chat gửi xen kẽ không bị chặn lại trong lúc đang truyền file lớn.
 \end{itemize}
 
 \paragraph{Vai trò của TCP và UDP.} Mục ``Techniques'' của đề gợi ý dùng TCP để truyền tin nhắn/file và UDP cho
 heartbeat/discovery, trong khi mục ``Goal'' và bước 6 của bảng chấm điểm yêu cầu tin nhắn và file đi trên
 \emph{UDP streaming} với cơ chế tin cậy tự xây. Nhóm theo yêu cầu của bước 6: TCP chỉ dùng cho handshake ngắn
-(trao khóa, đăng nhập --- bước 2) rồi đóng ngay; mọi tin nhắn, file, heartbeat (PING) đều đi trên UDP, còn UDP
+(trao khóa, đăng nhập - bước 2) rồi đóng ngay; mọi tin nhắn, file, heartbeat (PING) đều đi trên UDP, còn UDP
 broadcast dùng cho việc tự tìm server trong LAN. Thiết kế transport tham khảo hai hệ thống message-oriented mà đề
 gợi ý: Google QUIC \cite{rfc9000,rfc9002} và Steam GameNetworkingSockets \cite{valve-gns}.
 
 \subsection{Lựa chọn công nghệ}
-Nhóm hiện thực toàn bộ hệ thống bằng ngôn ngữ \textbf{Go} và \textbf{chỉ sử dụng thư viện chuẩn} (standard
-library). Các package chính được dùng gồm:
+Nhóm hiện thực toàn bộ hệ thống bằng ngôn ngữ \textbf{Go} và \textbf{chỉ sử dụng standard
+library}. Các package chính được dùng gồm:
 \begin{itemize}
   \item \fname{net}: mở và đọc/ghi trực tiếp trên socket TCP, UDP thô (\fname{net.ListenUDP},
         \fname{WriteToUDP}, \fname{ReadFromUDP}).
@@ -34,10 +32,10 @@ library). Các package chính được dùng gồm:
   \item \fname{encoding/binary}, \fname{encoding/json}: đóng gói header/frame nhị phân và serialize các bản tin
         tầng ứng dụng dưới dạng JSON.
 \end{itemize}
-Lý do chính nhóm chọn Go là vì cơ chế goroutine rất nhẹ (mỗi goroutine lúc khởi tạo chỉ tốn vài KB stack). Nhờ đó nhóm có thể tách riêng các luồng đọc, ghi và quản lý trạng thái cho từng kết nối; ngay cả khi server chạy đồng thời 20 client thì tổng số goroutine cũng chỉ khoảng vài chục. Ngoài ra, cấu trúc \fname{select} kết hợp với channel của Go rất hợp để viết event loop cho giao thức mạng mà hạn chế phải dùng quá nhiều khóa \texttt{Mutex}, giảm hẳn nguy cơ deadlock hay race condition.
+Go có goroutine nhẹ, thuận tiện để tách riêng các luồng đọc, ghi và quản lý trạng thái cho từng kết nối. Cú pháp \fname{select} và channel cũng tạo điều kiện để viết event loop cho giao thức mạng mà ít phải dùng khóa \texttt{Mutex}.
 
 \subsection{Phân tầng}
-Để đáp ứng yêu cầu tách bạch giữa xử lý mạng, logic nghiệp vụ và giao diện, nhóm chia mã nguồn thành bốn tầng như ở \cref{tab:tang}.
+Để tách biệt phần xử lý mạng, logic nghiệp vụ và giao diện theo yêu cầu thiết kế, mã nguồn được chia thành bốn tầng như ở \cref{tab:tang}.
 
 \begin{table}[H]
   \centering
@@ -53,14 +51,13 @@ Lý do chính nhóm chọn Go là vì cơ chế goroutine rất nhẹ (mỗi gor
     Định dạng & \fname{internal/protocol} & Định nghĩa header gói, các loại frame, bản tin ứng dụng (\fname{AppMsg},
     \fname{FileMeta}) và bộ đệm sắp thứ tự \fname{SeqBuffer} \\
     Transport & \fname{internal/transport} & Truyền tin cậy trên UDP, mã hóa, ghép kênh nhiều stream độc lập,
-    điều khiển luồng và tắc nghẽn \\
+    flow control và congestion control \\
     \bottomrule
   \end{tabularx}
 \end{table}
 
-Giữa tầng ứng dụng và tầng transport, nhóm giao tiếp thông qua một interface chung là \fname{transport.Endpoint}
-(\cref{sec:api}). Nhờ lớp trừu tượng này, phần code ở \fname{server} và \fname{client} chỉ cần gọi hàm gửi một
-bản tin ngắn, mở một stream dài để truyền file, hoặc đọc các mảnh byte đã được sắp xếp đúng thứ tự từ channel
-nhận về. Toàn bộ phần việc nặng ở dưới như chia nhỏ gói tin, đánh số thứ tự, gửi ACK, truyền lại gói mất hay mã
-hóa đều được gói gọn bên trong \fname{internal/transport}.
+Tầng ứng dụng giao tiếp với tầng transport qua interface \fname{transport.Endpoint} (\cref{sec:api}): code ở
+\fname{server} và \fname{client} chỉ gọi hàm gửi bản tin ngắn, mở một stream dài để truyền file, hoặc đọc các mảnh
+byte đã ghép đúng thứ tự từ channel nhận. Các bước chia nhỏ gói tin, đánh số thứ tự, gửi ACK, truyền lại gói mất
+và mã hóa đều nằm bên trong \fname{internal/transport}.
 

@@ -1,87 +1,43 @@
 \section{Bảo mật}
 \label{sec:bao-mat}
 
-Để đáp ứng yêu cầu bảo mật dữ liệu trên đường truyền trong mạng LAN, nhóm kết hợp cơ chế trao đổi khóa bất đối
-xứng lúc handshake với mã hóa xác thực (AEAD) cho toàn bộ gói UDP, đồng thời bổ sung các bước kiểm tra chống giả
-mạo danh tính ở tầng ứng dụng.
-
 \subsection{Trao đổi khóa}
-Ở mỗi phiên kết nối mới, cả client và server đều tự sinh một cặp khóa X25519 tạm thời \cite{rfc7748} rồi gửi
-khóa công khai cho nhau qua hai bản tin \texttt{HELLO} và \texttt{KEYX} (\cref{subsec:handshake}). Theo cơ chế
-Diffie--Hellman trên đường cong elliptic (ECDH), mỗi bên kết hợp khóa bí mật của mình với khóa công khai của đối
-phương để tính ra cùng một giá trị bí mật chung (\emph{shared secret}). Giá trị này không bao giờ đi qua mạng,
-nên dù có bắt gói tin trên LAN thì người nghe lén cũng chỉ thu được hai khóa công khai.
-
-Do cặp khóa X25519 được tạo mới cho từng phiên (\emph{ephemeral}) và hủy ngay sau khi phiên kết thúc, giả sử về
-sau khóa của một phiên nào đó bị lộ thì các phiên trước đó đã bị ghi hình lại cũng không thể giải mã được
-(đảm bảo tính chất \emph{forward secrecy}). Ngay ở bước đăng nhập kế tiếp, mật khẩu của người dùng chỉ được gửi
-đi sau khi đã mã hóa bằng khóa dẫn xuất $k_\text{tcp}$.
+Như đã mô tả ở \cref{subsec:handshake}, mỗi phiên kết nối sinh một cặp khóa X25519 tạm thời \cite{rfc7748} và trao
+đổi khóa công khai qua \texttt{HELLO}/\texttt{KEYX} để tính ra cùng \emph{shared secret} bằng ECDH rồi dẫn xuất hai
+khóa $k_\text{tcp}$ và $k_\text{udp}$. Khóa bí mật chung không truyền qua mạng (người bắt gói trên LAN chỉ thấy hai
+khóa công khai), và mật khẩu trong bản tin \texttt{AUTH} đã được mã hóa bằng $k_\text{tcp}$ trước khi gửi.
 
 \subsection{Mã hóa gói UDP}
-Toàn bộ gói UDP trên cổng 9001 đều được bảo vệ bằng thuật toán AES-256-GCM \cite{gcm} sử dụng khóa
-$k_\text{udp}$. GCM thuộc họ mã hóa có xác thực (AEAD -- \emph{authenticated encryption with associated data}):
-bên cạnh việc mã hóa phần payload chứa các frame, thuật toán còn tính ra một mã xác thực (authentication tag)
-dài 16 byte gắn ở cuối gói. Nếu gói tin bị chỉnh sửa dù chỉ một bit trên đường truyền, bước kiểm tra tag lúc giải
-mã sẽ báo lỗi ngay lập tức.
+Mọi gói UDP trên cổng 9001 được mã hóa bằng AES-256-GCM \cite{gcm} với khóa $k_\text{udp}$. Ngoài mã hóa, GCM gắn
+thêm 16 byte tag xác thực ở cuối gói: sửa dù một bit thì bên nhận giải mã thất bại và bỏ gói.
 
-\paragraph{Xác thực header bằng AAD.} Trong cấu trúc gói UDP (\cref{fig:goi}), 12 byte header đầu tiên bắt buộc
-phải gửi ở dạng rõ (plaintext) để server đọc được \texttt{conn\_id} (tra khóa giải mã của phiên) và
-\texttt{packet\_num} (tái tạo lại nonce). Tuy không thể mã hóa phần header này, nhóm đưa toàn bộ 12 byte header
-vào làm dữ liệu xác thực bổ sung (\emph{additional authenticated data} -- AAD) của AES-GCM \cite{gcm}. Nhờ vậy, nếu ai đó
-cố tình sửa \texttt{conn\_id} hoặc \texttt{packet\_num} ở phần header rõ, tag GCM ở cuối gói sẽ không còn khớp
-và gói tin bị loại bỏ.
+12 byte header phải để dạng rõ vì bên nhận cần đọc \texttt{conn\_id} để biết dùng khóa của phiên nào. Nhóm đưa
+header vào làm dữ liệu xác thực kèm theo (AAD) của GCM, nên header tuy không bị mã hóa nhưng cũng không sửa được.
 
-\paragraph{Đảm bảo nonce không bao giờ trùng lặp.} Một nguyên tắc sống còn khi dùng AES-GCM là tuyệt đối không
-được dùng lại cùng một giá trị nonce cho hai bản tin khác nhau dưới cùng một khóa $k_\text{udp}$ (nếu trùng
-nonce, kẻ tấn công có thể lấy XOR hai bản mã để khôi phục thông tin bản rõ và làm giả authentication tag \cite{gcm}). Thay
-vì phải tốn thêm 12 byte gửi kèm nonce trong mỗi gói, nhóm ghép nonce 12 byte một cách tất định từ chính header:
+\paragraph{Nonce.} GCM cần một nonce 12 byte không được lặp lại với cùng một khóa. Thay vì gửi kèm nonce trong mỗi
+gói, nhóm ghép nó từ header:
 \begin{center}
   \texttt{nonce = conn\_id (4) \,\textbar\, packet\_num (4) \,\textbar\, chiều (1) \,\textbar\, 0 0 0}
 \end{center}
-Trong phạm vi một kết nối, \texttt{packet\_num} chỉ tăng dần và mỗi lần truyền lại gói mất đều cấp số
-\texttt{packet\_num} mới (\cref{subsec:goi}), nên hai gói bất kỳ do cùng một phía phát ra không bao giờ có cùng
-nonce. Đặc biệt, byte thứ 9 chỉ \emph{chiều truyền} (\texttt{0} cho chiều client $\to$ server, \texttt{1} cho
-chiều server $\to$ client) là chi tiết bắt buộc phải có: bởi cả hai phía đều dùng chung khóa $k_\text{udp}$ và
-đều bắt đầu đếm \texttt{packet\_num} từ 0, nếu quên gắn byte chiều truyền thì gói số $n$ của client gửi lên và
-gói số $n$ của server gửi xuống sẽ sinh ra đúng cùng một nonce(thử thách~\ref{tt:nonce}).
+\texttt{packet\_num} chỉ tăng (gói gửi lại cũng nhận số mới, \cref{subsec:goi}) nên một phía không bao giờ lặp
+nonce. Byte \emph{chiều} (\texttt{0}: C$\to$S, \texttt{1}: S$\to$C) cần có vì hai phía dùng chung $k_\text{udp}$
+và cùng đếm từ 0.
 
-\paragraph{Xử lý gói lỗi và chống phát lại (replay).} Khi nhận một gói UDP bị sai magic/version, mang
-\texttt{conn\_id} không tồn tại hoặc giải mã GCM thất bại, bên nhận chỉ âm thầm bỏ qua gói đó mà không gửi bất kỳ
-bản tin báo lỗi nào trả lại. Cách xử lý im lặng này vừa tránh tiết lộ thông tin cho bên dò quét, vừa ngăn kẻ tấn
-công giả mạo địa chỉ IP để gửi gói rác làm ngắt kết nối thật.
-
-Ngoài ra, địa chỉ IP:port UDP của phía bên kia chỉ được cập nhật khi gói tin đến có \texttt{packet\_num} lớn hơn
-mốc cao nhất từng thấy \emph{và đã vượt qua bước xác thực GCM}, theo cùng nguyên tắc cập nhật địa chỉ của QUIC
-\cite{rfc9000}. Nhờ điều kiện kép này, việc bắt rồi phát lại
-(replay) một gói UDP cũ từ địa chỉ khác không thể đánh lừa server đổi địa chỉ đích của phiên. Bản thân dữ liệu
-bên trong gói bị replay cũng bị chặn lại ở hai lớp: bộ theo dõi ACK bỏ qua những \texttt{packet\_num} đã nhận, và
-bộ ghép stream (\fname{recvStream}) bỏ qua những đoạn byte có \texttt{offset} đã giao cho ứng dụng.
-
-Các tính chất trên đều có unit test tự động: không thấy bản rõ trên đường truyền (\fname{TestWireIsEncrypted}),
-sửa bất kỳ byte nào thì giải mã thất bại (\fname{TestTamperedPacketRejected}), nonce không trùng giữa hai chiều, và
-hai đầu ECDH ra cùng khóa (danh sách đầy đủ trong \fname{docs/testing.md}).
+Các tính chất trên có unit test: không thấy bản rõ trên đường truyền (\fname{TestWireIsEncrypted}), sửa bất kỳ byte
+nào thì giải mã thất bại (\fname{TestTamperedPacketRejected}), hai chiều không trùng nonce, hai đầu ECDH ra cùng
+khóa (\fname{docs/testing.md}).
 
 \subsection{Bảo mật ở tầng ứng dụng}
-\paragraph{Lưu trữ và kiểm tra mật khẩu.} File cơ sở dữ liệu \texttt{users.json} trên server không lưu mật khẩu
-dạng rõ mà lưu một chuỗi \texttt{salt} ngẫu nhiên 8 byte kèm giá trị băm \texttt{sha256(salt $\|$ password)} cho
-từng tài khoản (được tạo bằng công cụ \fname{cmd/mkusers}). Khi client gửi bản tin \texttt{AUTH}, mật khẩu nằm
-bên trong trường \texttt{sealed} đã được mã hóa bằng $k_\text{tcp}$; server giải mã lấy mật khẩu, ghép với
-\texttt{salt} của user đó để băm lại rồi mới so sánh. Nhờ có \texttt{salt} riêng cho từng người, nếu file
-\texttt{users.json} bị lộ thì người đọc cũng không biết ngay được mật khẩu gốc và hai tài khoản đặt trùng mật
-khẩu vẫn có chuỗi băm khác nhau (tuy nhiên trong thực tế nếu có dùng thư viện ngoài thì nên thay SHA-256 bằng các
-hàm băm mật khẩu chuyên dụng có độ trễ cao như bcrypt hoặc Argon2 để chống dò vét cạn tốt hơn). Ngoài ra, khi
-tài khoản không tồn tại hoặc nhập sai mật khẩu, server đều trả về cùng một thông báo lỗi \emph{``tài khoản hoặc
-mật khẩu không chính xác''} để tránh lộ danh sách username có trong hệ thống.
+\paragraph{Mật khẩu.} \texttt{users.json} không lưu mật khẩu rõ mà lưu \texttt{salt} ngẫu nhiên và
+\texttt{sha256(salt $\|$ password)} cho từng tài khoản. Server giải mã mật khẩu trong \texttt{AUTH}, băm lại với
+\texttt{salt} rồi so sánh.
 
-\paragraph{Chống giả mạo người gửi và đăng nhập trùng.} Sau khi xác thực thành công, server gắn cứng tên tài
-khoản đã đăng nhập vào đối tượng \fname{Session} ứng với \texttt{conn\_id} đó. Đối với mọi bản tin chat, DM hay
-metadata gửi file nhận từ kết nối này, server luôn \emph{gán đè} lại trường \texttt{From} bằng đúng tên tài khoản
-trong \fname{Session} trước khi chuyển tiếp đi nơi khác. Do đó, dù một client có tự sửa code để điền tên người
-khác vào trường \texttt{From} trong JSON thì phía người nhận vẫn thấy đúng tên thật của người gửi (được kiểm tra
-trong \fname{TestChatBroadcastInOrder} khi cho Alice gửi tin có \texttt{From = "bob"} và xác nhận phía nhận vẫn
-hiển thị \texttt{alice}). Để ngăn một tài khoản đăng nhập ở hai nơi cùng lúc, hàm \fname{Registry.AddPending}
-thực hiện cả bước kiểm tra đang online lẫn bước ghi danh vào map trong cùng một miền giữ khóa (\texttt{Lock}),
-nhờ vậy hai request đăng nhập cùng một tên tới sát nhau cũng không thể lọt qua cả hai.
+\paragraph{Chống giả mạo người gửi và đăng nhập trùng.} Sau khi đăng nhập, tên tài khoản được gắn vào
+\fname{Session} của kết nối đó. Với mọi tin chat, DM hay file nhận từ kết nối này, server \emph{gán đè} trường
+\texttt{From} bằng tên trong \fname{Session} trước khi chuyển tiếp, nên client tự sửa \texttt{From} thành người
+khác cũng vô ích (kiểm tra trong \fname{TestChatBroadcastInOrder}: Alice gửi tin có \texttt{From = "bob"}, người
+nhận vẫn thấy \texttt{alice}). \fname{Registry.AddPending} kiểm tra tên đang online và ghi danh trong cùng một lần
+giữ khóa, nên hai lần đăng nhập cùng tên sát nhau không thể cùng thành công.
 
 \paragraph{Kiểm tra thực tế bằng Wireshark.} Bắt gói trên loopback với bộ lọc
 \texttt{tcp.port == 9000 || udp.port == 9001}. Trên TCP 9000, bản tin \texttt{AUTH} chỉ chứa hai trường base64
@@ -104,17 +60,6 @@ chỉ lộ 12 byte header; phần còn lại là ciphertext, tìm nội dung câ
 \end{figure}}{}
 
 \subsection{Hạn chế hiện tại}
-Trong khuôn khổ thời gian của bài tập lớn, cơ chế bảo mật của nhóm vẫn còn một số điểm có thể cải thiện thêm:
-\begin{itemize}
-  \item \textbf{Chưa xác thực định danh của server:} vì server chưa có chứng chỉ số hay khóa tĩnh được cấu hình
-        trước cho client, bước trao đổi khóa ECDH hiện tại mới chống được việc nghe lén thụ động chứ chưa chống
-        được tấn công đứng giữa (\emph{man-in-the-middle} -- MITM) nếu kẻ tấn công chặn và thay khóa ngay từ gói
-        \texttt{HELLO}/\texttt{KEYX}. Để khắc phục, có thể cấp cho server một cặp khóa ký Ed25519 dài hạn (client
-        biết trước public key của server) để ký lên \texttt{server\_pub} trong bản tin \texttt{KEYX}.
-  \item \textbf{Hàm dẫn xuất khóa còn đơn giản:} hiện nhóm đang tách khóa trực tiếp bằng
-        $\mathrm{SHA256}(\mathit{shared} \| \text{nhãn})$. Nếu làm chuẩn hơn theo các giao thức thực tế như TLS
-        1.3 hay QUIC thì bước này nên dùng chuẩn HKDF (extract-then-expand).
-  \item \textbf{Chưa che giấu trường header:} vì 12 byte header vẫn gửi rõ, người quan sát mạng LAN dù không đọc
-        được nội dung nhưng vẫn nhìn thấy được \texttt{conn\_id}, tốc độ tăng \texttt{packet\_num} và kích thước
-        từng gói để đoán lưu lượng hoạt động của từng phiên.
-\end{itemize}
+Server chưa có chứng chỉ hay khóa định danh cố định, nên trao đổi khóa hiện chỉ chống được nghe lén, chưa chống được
+tấn công MITM nếu kẻ tấn công thay khóa ngay trong \texttt{HELLO}/\texttt{KEYX}. Cách khắc phục là
+server ký \texttt{server\_pub} bằng một khóa dài hạn mà client biết trước.

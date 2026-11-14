@@ -1,17 +1,17 @@
-\section{Điều khiển tắc nghẽn và Head-of-Line blocking}
+\section{Congestion control và Head-of-Line blocking}
 \label{sec:cc-hol}
 
 \subsection{CUBIC}
 \label{subsec:cubic}
-Điều khiển luồng (\cref{subsec:dieu-toc}) bảo vệ \emph{bên nhận}; điều khiển tắc nghẽn bảo vệ \emph{mạng} bằng
-cửa sổ \textit{cwnd} giới hạn số byte đang bay chưa có ACK. Nhóm cài CUBIC theo RFC~9438 \cite{rfc9438} (mặc định
-trên Linux):
+Bên cạnh cửa sổ \texttt{window} của flow control (\cref{subsec:dieu-toc}), bên gửi duy trì thêm congestion window
+\textit{cwnd} để giới hạn lượng dữ liệu in-flight trên đường truyền theo thuật toán CUBIC (RFC~9438
+\cite{rfc9438}, mặc định trên Linux):
 \begin{itemize}
   \item \textbf{Slow start:} \texttt{cwnd} bắt đầu ở 10 gói (12 KB) \cite{rfc9002} và cộng thêm đúng số byte được
         ACK, tức gấp đôi mỗi RTT.
   \item \textbf{Khi mất gói:} $W_\text{max} \leftarrow \mathit{cwnd}$, $\mathit{cwnd} \leftarrow 0{,}7 \cdot
         \mathit{cwnd}$. Các gói gửi trước thời điểm giảm không làm giảm thêm lần nữa (\emph{recovery period}
-        \cite{rfc9002}); thiếu bước này thì một lần tràn hàng đợi sẽ nhân $0{,}7$ nhiều lần liên tiếp.
+        \cite{rfc9002}), không có bước này thì một lần tràn hàng đợi sẽ nhân $0{,}7$ nhiều lần liên tiếp.
   \item \textbf{Congestion avoidance:} cửa sổ tăng theo hàm bậc ba của thời gian $t$ từ lúc bắt đầu hồi phục:
         \begin{equation}
           W_\text{cubic}(t) = C\,(t-K)^3 + W_\text{max}, \qquad
@@ -19,8 +19,8 @@ trên Linux):
           \label{eq:cubic}
         \end{equation}
         Đường cong tăng nhanh khi còn xa $W_\text{max}$, đi ngang khi tới gần (ngưỡng vừa gây tràn), rồi dốc lên
-        lại nếu không mất gói. Song song, nhóm tính $W_\text{est}$ mô phỏng Reno và lấy
-        $\mathit{cwnd} = \max(W_\text{cubic}, W_\text{est})$ để CUBIC không bao giờ chậm hơn Reno khi RTT nhỏ.
+        lại nếu không mất gói. Ngoài ra, nhóm ước lượng song song cửa sổ mà Reno (TCP truyền thống) sẽ có và lấy
+        giá trị lớn hơn, để khi RTT nhỏ (như trong LAN) CUBIC không tăng chậm hơn Reno.
   \item \textbf{Sàn và trần:} tối thiểu 2 gói, tối đa 1 MB (bằng cửa sổ nhận).
 \end{itemize}
 
@@ -69,19 +69,18 @@ từng nhịp ticker (\fname{TestLongCCGraph}, biến môi trường \texttt{BTL
         table[header=false, x index=0, y index=1] {data/loss.dat};
     \end{axis}
   \end{tikzpicture}}
-  \caption{Phóng to \cref{fig:cwnd} trong đoạn 3--16 s: đường bậc 3 ``chữ S nằm ngang'' giữa hai lần mất}
+  \caption{Phóng to \cref{fig:cwnd} trong đoạn 3 - 16 s: đường bậc 3 ``chữ S nằm ngang'' giữa hai lần mất}
   \label{fig:cwnd-zoom}
 \end{figure}
 
 \begin{itemize}
-  \item \textbf{Slow start} vọt lên 297 KB, vượt xa dung lượng đường truyền, gây ba lần tràn liên tiếp
+  \item \textbf{Slow start} nhảy lên 297 KB, vượt xa dung lượng đường truyền, gây ba lần tràn liên tiếp
         (297 $\to$ 210 $\to$ 148 $\to$ 105 KB).
   \item \textbf{Điểm mất gói ổn định quanh 147 KB}, khớp với $\text{BDP} = 2\,\text{MB/s} \times 42\,\text{ms}
         \approx 84$ KB cộng bộ đệm 64 KB $= 148$ KB. Sau mỗi lần mất, \texttt{cwnd} về khoảng 103 KB, đúng
         $0{,}7 \times 147$.
-  \item \textbf{Dáng bậc ba} hiện rõ ở \cref{fig:cwnd-zoom}: tăng nhanh, đi ngang quanh $W_\text{max}$, rồi nhích
-        lên. Chu kỳ giữa hai lần mất trung bình khoảng 4 s, sát với lý thuyết
-        $K = \sqrt[3]{126 \times 0{,}3 / 0{,}4} \approx 4{,}5$ s.
+  \item \textbf{Dáng bậc ba} hiện rõ ở \cref{fig:cwnd-zoom}: tăng nhanh, đi ngang quanh $W_\text{max}$, rồi đi nhẹ
+        lên.
   \item \textbf{Thông lượng 2,01 MB/s}, dùng trọn băng thông. Cửa sổ cố định 64 KB (\texttt{-cc fixed}) chỉ đạt
         1,47 MB/s vì nhỏ hơn BDP.
 \end{itemize}
@@ -89,11 +88,9 @@ từng nhịp ticker (\fname{TestLongCCGraph}, biến môi trường \texttt{BTL
 \subsection{Giới hạn của CUBIC khi mất gói ngẫu nhiên}
 \label{subsec:cubic-gioi-han}
 CUBIC coi mọi lần mất gói là nghẽn. Với \texttt{-loss 0.1} (mô phỏng Wi-Fi yếu), \texttt{cwnd} bị ép xuống sàn
-2 gói dù đường truyền đang trống, đúng như công thức Mathis \cite{mathis}:
-$\text{throughput} \approx \frac{\mathit{MSS}}{\mathit{RTT}} \cdot \frac{1{,}22}{\sqrt{p}}$.
-Trong \cref{tab:do-transport}, với loss 10\% và jitter 20 ms, CUBIC mất 48,3 s cho 5 MB (0,11 MB/s), còn cửa sổ cố
-định 64 KB đạt 1,69 MB/s. Vì vậy nhóm giữ cờ \texttt{-cc fixed} cho các demo ở mức loss cao; hướng khắc phục
-triệt để là BBR \cite{bbr} (\cref{sec:ket-luan}).
+2 gói dù đường truyền đang trống. Trong \cref{tab:do-transport}, với loss 10\% và jitter 20 ms, CUBIC mất 48,3 s cho 5 MB (0,11 MB/s), còn cửa sổ cố
+định 64 KB đạt 1,69 MB/s. Vì vậy nhóm giữ cờ \texttt{-cc fixed} cho các demo ở mức loss cao (hướng khắc phục ở
+\cref{sec:ket-luan}).
 
 \subsection{Không có Head-of-Line blocking}
 \label{sec:hol}

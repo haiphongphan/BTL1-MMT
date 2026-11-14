@@ -5,7 +5,7 @@ Bài tập lớn 1, môn Mạng máy tính (CO3093). Chat nhóm, nhắn tin riê
 - **Server**: handshake và đăng nhập qua TCP (`:9000`); toàn bộ dữ liệu đi qua **UDP tin cậy tự viết** (`:9001`) với SACK, RTO, nhiều stream độc lập (không Head-of-Line blocking), congestion control CUBIC, mã hóa AES-256-GCM với khóa trao đổi bằng X25519.
 - **Client**: một process trên máy người dùng. Giao diện web do **HTTP server tự viết trên raw TCP** phục vụ tại `127.0.0.1:808x`, HTML/JS thuần, có trang **đăng nhập / đăng ký**; ngoài ra có CLI trong terminal.
 
-Tài liệu: [`docs/protocol.md`](docs/protocol.md) (đặc tả giao thức), [`docs/reliability.md`](docs/reliability.md) (thiết kế tin cậy, đồ thị cwnd), [`docs/code-walkthrough.md`](docs/code-walkthrough.md) (đọc hiểu code từ A đến Z), [`docs/testing.md`](docs/testing.md) (danh sách unit test), [`report/`](report/) (báo cáo LaTeX).
+Tài liệu: [`docs/protocol.md`](docs/protocol.md) (đặc tả giao thức), [`docs/reliability.md`](docs/reliability.md) (thiết kế tin cậy, đồ thị cwnd), [`docs/testing.md`](docs/testing.md) (danh sách unit test), [`report/`](report/) (báo cáo LaTeX).
 
 ## 1. Cài đặt
 
@@ -216,7 +216,7 @@ internal/transport  # UDP tin cậy: conn, stream, ack, rtt, cubic, crypto, mux,
 internal/server     # handshake/auth, registry, router (chat/DM/relay file), discovery
 internal/client     # core (connect/reconnect), discovery, gửi/nhận file, event log, test hệ thống
 internal/webui      # HTTP server tự viết + static/ (HTML/JS/CSS thuần, nhúng bằng embed)
-docs/               # protocol.md, reliability.md, code-walkthrough.md, testing.md, img/
+docs/               # protocol.md, reliability.md, testing.md, img/
 report/             # báo cáo LaTeX (pdflatex -shell-escape, hoặc Overleaf)
 scripts/            # run_clients.sh (test tải), plotcc (vẽ đồ thị cwnd)
 ```

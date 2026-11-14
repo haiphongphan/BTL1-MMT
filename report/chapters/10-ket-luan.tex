@@ -3,31 +3,27 @@
 
 \subsection{Kết quả đạt được}
 Nhóm đã thiết kế và cài đặt hoàn chỉnh một ứng dụng cộng tác (chat chung, nhắn riêng, gửi file) chạy trên giao
-thức tự thiết kế trên UDP, chỉ dùng thư viện chuẩn của Go. Những kết quả chính, đều có số đo kiểm chứng:
+thức tự thiết kế trên UDP, chỉ dùng standard library của Go. Những kết quả chính:
 \begin{itemize}
   \item \textbf{Tin cậy:} dữ liệu đúng từng byte khi mất 20\% gói mỗi chiều; file 200 MB qua server khớp SHA-256
         mà bộ nhớ server không tăng theo kích thước file.
-  \item \textbf{Hiệu năng:} CUBIC dùng hết 2 MB/s của nút cổ chai, quỹ đạo \texttt{cwnd} đúng đường bậc ba; không
+  \item \textbf{Hiệu năng:} CUBIC dùng hết 2 MB/s của nút cổ chai, quỹ đạo \texttt{cwnd} là đường bậc ba; không
         có HoL: tin chat khi đang truyền file chỉ trễ thêm khoảng 2 ms (p50).
   \item \textbf{Bảo mật:} X25519 + AES-256-GCM, header được xác thực qua AAD, nonce không bao giờ lặp.
   \item \textbf{Ổn định:} 20 client đồng thời với số goroutine cố định; tự kết nối lại; \texttt{CLOSE} khi tắt nên
-        danh sách online cập nhật ngay; \fname{go test -race} sạch.
+        danh sách online cập nhật ngay; \fname{go test -race} không phát hiện race condition.
 \end{itemize}
 
 \subsection{Hướng phát triển}
-Nếu có thêm thời gian phát triển tiếp dự án, nhóm dự định nâng cấp hệ thống theo bốn hướng sau:
+Một số hướng có thể mở rộng thêm từ hệ thống hiện tại:
 \begin{itemize}
-  \item \textbf{Bổ sung thuật toán BBR bên cạnh CUBIC} \cite{bbr}: vì BBR điều chỉnh tốc độ dựa trên băng thông
-        ước lượng và RTT tối thiểu thay vì coi mọi lần mất gói là tắc nghẽn, việc tích hợp thêm BBR sẽ giúp giữ
-        thông lượng cao ngay cả khi mạng bị rớt gói ngẫu nhiên (\cref{subsec:cubic-gioi-han}).
-  \item \textbf{Xác thực định danh server và chuẩn hóa HKDF:} gắn thêm cặp khóa ký dài hạn (như Ed25519) cho
-        server để ký lên \texttt{server\_pub} trong bước \texttt{KEYX} nhằm chống tấn công man-in-the-middle,
-        đồng thời chuyển bước dẫn xuất khóa sang chuẩn HKDF.
-  \item \textbf{Lập lịch công bằng giữa nhiều luồng truyền file:} hiện tại các frame của mọi file đang mở trên
-        cùng một kết nối được xếp chung vào \texttt{bulkQ} theo thứ tự FIFO; nhóm có thể tách hàng đợi theo từng
-        stream file và lấy frame theo kiểu xoay vòng (round-robin) để một file nhỏ gửi sau không phải đợi file
-        lớn gửi trước.
-  \item \textbf{Truyền file ngang hàng (P2P) trực tiếp giữa hai client:} tận dụng server làm kênh báo hiệu để hai
-        client trong cùng mạng LAN hoặc qua NAT thực hiện UDP hole punching và truyền các gói STREAM chứa file trực
-        tiếp cho nhau, giúp giảm tải băng thông chuyển tiếp cho server.
+  \item \textbf{Congestion control dựa trên băng thông và RTT} như BBR \cite{bbr} để tránh giảm mạnh \texttt{cwnd}
+        khi đường truyền có mất gói ngẫu nhiên (\cref{subsec:cubic-gioi-han}).
+  \item \textbf{Xác thực định danh server:} cấu hình khóa ký dài hạn cho server để ký \texttt{server\_pub} trong
+        bước \texttt{KEYX}, chống tấn công MITM (\cref{sec:bao-mat}).
+  \item \textbf{Lập lịch bằng round-robin giữa các stream file:} tách \texttt{bulkQ} theo từng stream file
+        thay vì xếp chung một hàng đợi FIFO, để file nhỏ gửi sau không phải chờ file lớn gửi trước trên cùng kết nối.
+  \item \textbf{Truyền file trực tiếp P2P giữa hai client:} dùng server làm kênh báo hiệu để hai client trong cùng
+        LAN thực hiện UDP hole punching và gửi thẳng các gói STREAM chứa file cho nhau, giảm tải băng thông chuyển
+        tiếp trên server.
 \end{itemize}

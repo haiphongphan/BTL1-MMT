@@ -1,11 +1,6 @@
 \section{Sequence diagram}
 \label{sec:sequence}
 
-Ba sơ đồ tuần tự dưới đây mô tả luồng trao đổi bản tin ở tầng ứng dụng cho ba tác vụ chính: đăng nhập, gửi tin
-nhắn riêng (DM) và truyền file. Cơ chế phát hiện mất gói và truyền lại ở tầng dưới sẽ được minh họa riêng tại
-\cref{fig:seq-loss}; trong các sơ đồ của chương này, mỗi mũi tên \texttt{STREAM} được hiểu là đã đi qua tầng
-transport (được chia frame, mã hóa AES-GCM, xác nhận ACK và tự động gửi lại nếu rớt gói).
-
 \subsection{Đăng nhập}
 \begin{figure}[H]
   \centering
@@ -14,17 +9,14 @@ transport (được chia frame, mã hóa AES-GCM, xác nhận ACK và tự độ
   \label{fig:seq-login}
 \end{figure}
 
-Ở quy trình đăng nhập (\cref{fig:seq-login}), có hai chi tiết thiết kế đáng lưu ý. Thứ nhất, server không đợi tới
-khi gói UDP đầu tiên bay tới mới khởi tạo đối tượng kết nối: hàm \fname{Mux.Accept} được gọi ngay trong bước xử lý
-\texttt{AUTH} trên TCP, nhờ vậy khi gói PING đầu tiên của client tới cổng 9001 là đã có sẵn \fname{Conn} đón
-nhận. Thứ hai, danh sách user đính kèm trong \texttt{AUTH\_OK} chỉ đóng vai trò khởi tạo nhanh cho client vừa
-đăng nhập; mọi thay đổi trạng thái online về sau đều được đồng bộ qua kênh UDP bằng bản tin \texttt{users} gửi
-tới toàn bộ thành viên trong phòng.
+Trong quy trình đăng nhập (\cref{fig:seq-login}), hàm \fname{Mux.Accept} được gọi ngay ở bước xử lý \texttt{AUTH}
+trên TCP để tạo sẵn đối tượng \fname{Conn} trước khi gói PING đầu tiên của client tới cổng 9001. Danh sách user
+trả về trong \texttt{AUTH\_OK} giúp client khởi tạo danh sách ban đầu ngay sau khi đăng nhập; các thay đổi trạng
+thái online về sau được đồng bộ qua kênh UDP bằng bản tin \texttt{users} phát cho cả phòng.
 
-Đăng ký (tab Đăng ký trên Web UI, \texttt{/register} trong CLI hoặc cờ \texttt{-register}) có cùng sơ đồ, chỉ
-khác message thứ ba là \texttt{REGISTER}: trước khi tới \fname{AddPending}, server kiểm tra luật tên và mật khẩu,
-từ chối tên đã có, thêm tài khoản với salt mới và ghi lại \texttt{users.json}
-(\cref{subsec:handshake}).
+Đăng ký (tab Đăng ký trên Web UI, \texttt{/register} trong CLI hoặc cờ \texttt{-register}) dùng cùng sơ đồ, chỉ
+đổi message thứ ba thành \texttt{REGISTER}: trước khi gọi \fname{AddPending}, server kiểm tra luật tên và mật khẩu,
+từ chối tên đã tồn tại, tạo tài khoản với salt mới và ghi xuống \texttt{users.json} (\cref{subsec:handshake}).
 
 \subsection{Một tin nhắn riêng}
 \begin{figure}[H]
@@ -34,10 +26,9 @@ từ chối tên đã có, thêm tài khoản với salt mới và ghi lại \te
   \label{fig:seq-dm}
 \end{figure}
 
-Khi gửi tin nhắn (\cref{fig:seq-dm}), để tiết kiệm băng thông, server không gửi trả lại bản tin đó về cho chính
-người gửi mà phía JavaScript trên trình duyệt sẽ tự hiển thị tin nhắn ngay khi nhận phản hồi \texttt{200 OK} từ
-request \texttt{POST /api/send}. Đối với tin nhắn chat chung (broadcast), luồng xử lý diễn ra hoàn toàn tương tự
-nhưng server sẽ đẩy bản tin vào hàng đợi \texttt{sendCh} của tất cả các session đang active (trừ người gửi).
+Khi gửi tin nhắn (\cref{fig:seq-dm}), server không gửi vòng bản tin đó về lại cho người gửi mà JavaScript trên
+trình duyệt tự hiển thị ngay khi nhận \texttt{200 OK} từ \texttt{POST /api/send}. Với tin nhắn broadcast, luồng đi tương tự nhưng server đẩy bản tin vào hàng đợi \texttt{sendCh} của mọi session đang active
+(trừ người gửi).
 
 \subsection{Gửi file qua server}
 \begin{figure}[H]
@@ -47,10 +38,9 @@ nhưng server sẽ đẩy bản tin vào hàng đợi \texttt{sendCh} của tấ
   \label{fig:seq-file}
 \end{figure}
 
-Với tính năng gửi file (\cref{fig:seq-file}), nhờ phần metadata nằm ngay ở đầu stream (\cref{subsec:app}), server
-không phải tốn công đồng bộ giữa hai stream khác nhau. Ngay khi tách xong metadata, server tạo một goroutine
-\fname{relayFile} chỉ làm nhiệm vụ đọc từng mảnh byte từ channel đệm (tối đa 256 mảnh) rồi ghi tiếp sang stream
-hướng về phía người nhận theo kiểu cuốn chiếu (pipeline). Nếu người nhận bị mất kết nối giữa chừng, stream gửi
-xuống người đó trả về lỗi, server ghi nhận log và bỏ qua các mảnh còn lại để không làm treo luồng đọc của người
-gửi. Trường hợp người dùng chọn gửi file cho cả phòng (trường \texttt{to} để trống), server sẽ mở đồng thời một
-stream tới từng client đang online và fan-out từng mảnh dữ liệu tới tất cả các stream đó.
+Khi truyền file (\cref{fig:seq-file}), vì phần metadata nằm ngay ở đầu stream (\cref{subsec:app}), server tách xong
+metadata là tạo ngay một goroutine \fname{relayFile} đọc từng mảnh byte từ channel đệm (tối đa 256 mảnh) và ghi
+tiếp sang stream phía người nhận theo kiểu pipeline. Nếu người nhận mất kết nối giữa chừng, stream gửi
+xuống trả về lỗi, server ghi log và xóa bỏ các mảnh còn lại để không chặn luồng đọc của người gửi. Khi gửi file cho
+cả phòng (trường \texttt{to} để trống), server mở đồng thời một stream tới từng client đang online và fan-out từng
+mảnh dữ liệu sang tất cả các stream đó.

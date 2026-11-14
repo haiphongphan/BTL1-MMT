@@ -1,9 +1,8 @@
 \section{Kiểm thử}
 \label{sec:kiem-thu}
 
-Để kiểm tra độ ổn định của giao thức tự thiết kế trước khi ghép vào ứng dụng hoàn chỉnh, nhóm kết hợp cả kiểm
-thử tự động (unit test, integration test trên mạng giả lập) lẫn chạy kịch bản thực tế trên các file thực thi của
-server và client.
+Hệ thống được kiểm thử ở ba mức: unit test tầng giao thức/transport, integration test trên mạng giả lập và chạy
+kịch bản thực tế trên các file thực thi của server và client.
 
 \paragraph{Môi trường đo đạc.} Các phép đo hiệu năng của tầng transport được thực hiện trên môi trường WSL2
 (Linux 6.18, 18 vCPU), Go 1.27.3, chạy qua giao diện loopback vào ngày 12/11/2026. Các lệnh kiểm tra tự động
@@ -21,10 +20,9 @@ của dự án gồm:
 
 \subsection{Giả lập mạng}
 \label{subsec:gia-lap}
-Nếu chỉ test trực tiếp trên giao diện loopback (\texttt{127.0.0.1}), gói UDP gần như không bao giờ bị rớt và RTT
-chỉ dưới 1 ms, nên các nhánh code truyền lại gói mất hay điều khiển tắc nghẽn CUBIC sẽ không có cơ hội chạy thật.
-Vì vậy, nhóm viết lớp bọc \fname{LossyConn} nằm ngay trên socket UDP để chủ động tạo ra các điều kiện mạng kém
-ở chiều gửi theo các tham số trong \cref{tab:lossy}.
+Khi chạy trên loopback (\texttt{127.0.0.1}), gói UDP gần như không rớt và RTT dưới 1 ms, nên các nhánh truyền lại
+gói mất hay congestion control CUBIC không được kích hoạt. Do đó nhóm viết lớp bọc \fname{LossyConn} đặt ngay trên
+socket UDP để mô phỏng các điều kiện mạng ở chiều gửi theo tham số trong \cref{tab:lossy}.
 
 \begin{table}[H]
   \centering
@@ -40,7 +38,7 @@ Vì vậy, nhóm viết lớp bọc \fname{LossyConn} nằm ngay trên socket UD
     FIFO giống hàng đợi của router thật \\
     \texttt{Reorder} & Cố ý hẹn giờ trễ độc lập cho từng gói để gây hiện tượng đảo thứ tự gói hàng loạt \\
     \texttt{Rate}, \texttt{QueueBytes} & Giới hạn băng thông tối đa kèm bộ đệm hàng đợi; khi bộ đệm đầy thì bỏ
-    gói ở đuôi (drop-tail), tạo ra mất gói \emph{do tắc nghẽn} để kiểm tra CUBIC \\
+    gói theo kiểu drop-tail, tạo ra mất gói \emph{do tắc nghẽn} để kiểm tra CUBIC \\
     \bottomrule
   \end{tabularx}
 \end{table}
@@ -50,7 +48,7 @@ Ngoài việc dùng trong các file test, cả hai chương trình \fname{server
 
 \subsection{Unit Test của tầng giao thức và transport}
 Hai package \fname{internal/protocol} (20 test) và \fname{internal/transport} (45 test) có 65 test tự động, chạy hết
-khoảng 15 giây. Các test phủ: encode/decode mọi loại frame và từ chối dữ liệu hỏng mà không panic; SACK, RTT/RTO và
+khoảng 15 giây. Các test bao phủ: encode/decode mọi loại frame và từ chối dữ liệu hỏng mà không panic; SACK, RTT/RTO và
 ba điều kiện phát hiện mất gói; ghép stream khi gói đến ngược, trùng, chồng lấn hoặc FIN tới trước; mã hóa (không lộ
 bản rõ, sửa một byte là hỏng tag, nonce không trùng); các pha của CUBIC; truyền 5 MB qua loss 20\% khớp từng byte;
 vòng đời kết nối (CLOSE, idle timeout, RTO backoff); và bản thân bộ giả lập mạng. Bảng chi tiết từng nhóm test nằm
@@ -58,9 +56,8 @@ trong \fname{docs/testing.md}.
 
 \subsection{Phép đo tầng transport}
 \label{subsec:do-transport}
-Bên cạnh các test kiểm tra tính đúng đắn, nhóm thực hiện đo thông lượng truyền một stream lớn qua bộ giả lập mạng
-ở nhiều tổ hợp tham số khác nhau (\cref{tab:do-transport}). Cột ``CC'' cho biết chế độ điều khiển tắc nghẽn được
-sử dụng (thuật toán CUBIC hoặc cửa sổ cố định \texttt{fixed}).
+\Cref{tab:do-transport} ghi lại thông lượng truyền một stream lớn qua bộ giả lập mạng ở các tổ hợp tham số khác
+nhau; cột ``CC'' là chế độ congestion control (CUBIC hoặc cửa sổ cố định \texttt{fixed}).
 
 \begin{table}[H]
   \centering
@@ -71,8 +68,8 @@ sử dụng (thuật toán CUBIC hoặc cửa sổ cố định \texttt{fixed}).
     \toprule
     \textbf{Kịch bản} & \textbf{CC} & \textbf{Kết quả} & \textbf{Gói mất} \\
     \midrule
-    5 MB, loss 20\% mỗi chiều & cố định & 0,11 s, đúng từng byte & 22,4\% \\
-    1 MB, loss 10\% & CUBIC & 1,0 s, đúng từng byte & 18,1\% \\
+    5 MB, loss 20\% mỗi chiều & cố định & 0,11 s, đúng các byte & 22,4\% \\
+    1 MB, loss 10\% & CUBIC & 1,0 s, đúng các byte & 18,1\% \\
     50 MB, loss 10\%, jitter 20 ms & cố định 64 KB & 31,0 s, \textbf{1,69 MB/s} & 10,0\% \\
     5 MB, loss 10\%, jitter 20 ms & CUBIC & 48,3 s, 0,11 MB/s (\cref{subsec:cubic-gioi-han}) & 13,3\% \\
     20 MB, loss 0\%, jitter 20 ms & CUBIC & 1,06 s, 19,7 MB/s & 0,2\% \\
@@ -82,18 +79,16 @@ sử dụng (thuật toán CUBIC hoặc cửa sổ cố định \texttt{fixed}).
   \end{tabularx}
 \end{table}
 
-Trong bảng trên, cột ``Gói mất'' là tỉ lệ gói tin mà phía gửi xác định là đã mất và phải truyền lại so với tổng
-số gói phát ra. Tỉ lệ này thường cao hơn con số \texttt{loss} cấu hình cho chiều đi vì bản thân các gói ACK ở
-chiều về cũng bị rớt theo cùng xác suất, khiến một số gói dữ liệu hết RTO và được gửi lại. Một kết quả đáng chú ý
-là ở kịch bản truyền 20 MB có jitter 20 ms nhưng không bật rớt gói (\texttt{loss 0\%}), tỉ lệ báo mất gói nhầm chỉ
-còn 0,2\% (bản đầu của bộ giả lập hẹn giờ riêng cho từng gói nên đảo thứ tự hàng loạt, làm con số này lên tới
-89\%; nhóm sửa lại để gói đi qua một hàng đợi FIFO như router thật). Kết quả đo độ trễ tin nhắn chat khi truyền song song với file lớn đã được trình bày ở
-\cref{tab:hol}.
+Cột ``Gói mất'' là tỉ lệ gói tin mà bên gửi xác định đã mất và truyền lại so với tổng số gói phát ra; con số này
+cao hơn mức \texttt{loss} cấu hình cho chiều đi vì các gói ACK ở chiều về cũng bị rớt theo cùng xác suất, làm một
+số gói dữ liệu hết RTO và được gửi lại. Ở kịch bản truyền 20 MB có jitter 20 ms nhưng \texttt{loss 0\%}, tỉ lệ báo
+mất gói nhầm là 0,2\%. Kết quả đo độ trễ tin chat khi truyền song
+song với file lớn nằm ở \cref{tab:hol}.
 
-\subsection{Integration Test và hệ thống của tầng ứng dụng}
+\subsection{Integration Test và System Test của tầng ứng dụng}
 \label{subsec:test-he-thong}
-Ở tầng ứng dụng, phía server có bộ 9 test tích hợp trong \fname{internal/server/router\_test.go} ghép trực tiếp
-logic định tuyến của server thật với kết nối trong bộ nhớ (\fname{transport.FakePair}), bao gồm:
+Ở tầng ứng dụng, phía server có 9 test tích hợp trong \fname{internal/server/router\_test.go} ghép logic định tuyến
+của server với kết nối trong bộ nhớ (\fname{transport.FakePair}) và test xác thực trong \fname{auth\_test.go}:
 \begin{itemize}
   \item Broadcast 20 tin nhắn liên tiếp giữ đúng thứ tự và kiểm tra server tự động ghi đè trường \texttt{From}.
   \item Gửi DM hoặc gửi file tới một người dùng đang offline thì người gửi nhận lại bản tin \texttt{error}.
@@ -103,25 +98,19 @@ logic định tuyến của server thật với kết nối trong bộ nhớ (\f
         còn lại; chặn trường hợp hai client đăng nhập trùng tên.
   \item Các bản tin từ client gửi lên bị đảo thứ tự (\texttt{Seq} 2, 3 rồi mới tới 1) được \fname{SeqBuffer} của
         server sắp lại thành 1, 2, 3 và đánh lại dãy \texttt{Seq} liên tiếp trước khi phát xuống người nhận.
-  \item Danh sách user phát xuống có kèm địa chỉ của từng người (\fname{TestUserListHasAddrs}).
-  \item Người nhận chậm làm đầy hàng đợi bị ngắt riêng (\fname{TestSlowReceiverIsDisconnected}, mô tả bên dưới).
+  \item Danh sách user phát xuống có kèm địa chỉ của từng người (\fname{TestUserListHasAddrs}); kiểm tra luật tên,
+        mật khẩu, tên trùng khi đăng ký và lưu vào \texttt{users.json} (\fname{TestRegisterValidatesAndPersists}).
+  \item Khi một người nhận ngưng đọc làm đầy hàng đợi (\fname{TestSlowReceiverIsDisconnected}), các người gửi khác
+        vẫn hoạt động bình thường và chỉ kết nối của người nhận chậm đó bị server ngắt.
 \end{itemize}
-Thêm vào đó, \fname{TestRegisterValidatesAndPersists} (\fname{auth\_test.go}) kiểm tra luật tên, mật khẩu, tên
-trùng khi đăng ký và tài khoản mới được ghi xuống \texttt{users.json}.
-Ngoài ra, bộ test end-to-end trong \fname{internal/client/e2e\_test.go} khởi chạy cả server thật lẫn hai client
-thật giao tiếp qua socket UDP localhost với mức rớt gói 10\% ở mỗi chiều để kiểm tra toàn diện: chat đúng đích,
-truyền file 5 MB khớp mã băm SHA-256, tin nhắn DM gửi xen giữa lúc đang tải file vẫn tới ngay lập tức, và danh
-sách online tự cập nhật khi một bên đóng kết nối; \fname{TestRegisterLoginLogout} đi hết vòng đăng ký sai luật,
-đăng ký đúng, đăng xuất rồi đăng nhập lại như Web UI. Toàn bộ các test này đều được chạy kèm cờ \texttt{-race}.
+Ở mức end-to-end, \fname{internal/client/e2e\_test.go} chạy server thật và hai client thật qua socket UDP localhost
+với mức rớt gói 10\% mỗi chiều (kèm cờ \texttt{-race}): kiểm tra chat đúng đích, truyền file 5 MB khớp SHA-256, DM
+gửi xen lúc đang tải file tới ngay, danh sách online tự cập nhật khi một bên đóng kết nối, và chu trình đăng ký sai
+luật $\to$ đăng ký đúng $\to$ đăng xuất $\to$ đăng nhập lại (\fname{TestRegisterLoginLogout}).
 
-Bên cạnh đó, test tích hợp \fname{TestSlowReceiverIsDisconnected} kiểm tra thêm trường hợp một người nhận ngưng đọc
-làm đầy hàng đợi: các người gửi khác vẫn hoạt động bình thường không bị chặn, và chỉ riêng kết nối của người nhận
-chậm đó bị server ngắt.
-
-Để kiểm chứng toàn hệ thống ở mức sát thực tế nhất, nhóm biên dịch và chạy trực tiếp các file thực thi của
-\fname{server} và \fname{client} (kèm Web UI, tương tác qua các endpoint \texttt{/api}) trên môi trường macOS
-(Apple Silicon, Go 1.27) qua giao diện loopback vào ngày 13/11/2026. Ở mọi kịch bản trong \cref{tab:he-thong}, cả
-hai phía đều được cấu hình mức rớt gói \texttt{-loss 0.1} (trừ khi có ghi chú riêng).
+Nhóm đã biên dịch và chạy hai chương trình \fname{server} và \fname{client} kèm Web UI, gọi qua
+các endpoint \texttt{/api} trên macOS (Apple Silicon, Go 1.27) qua giao diện loopback vào ngày 13/11/2026. Mọi kịch
+bản trong \cref{tab:he-thong} đều bật \texttt{-loss 0.1} ở cả hai phía (trừ khi có ghi chú riêng).
 
 \begin{longtable}{c L{0.27\linewidth} L{0.6\linewidth}}
   \caption{Test hệ thống với server và client thật}\label{tab:he-thong} \\
