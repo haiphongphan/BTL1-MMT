@@ -282,6 +282,15 @@ function renderFile(p, type) {
   if (type === 'file_done') {
     el.classList.add('done');
     el.querySelector('.pct').textContent = `✔ ${fmtBytes(p.size)}` + (p.path ? ` → ${p.path}` : '');
+    if (p.dir === 'in' && p.path && !el.querySelector('a.dl')) {
+      // file đã lưu trong thư mục downloads của client; nút này tải bản đó về máy qua trình duyệt
+      const a = document.createElement('a');
+      a.className = 'dl';
+      a.textContent = '⬇ Tải xuống';
+      a.href = `/api/download?name=${encodeURIComponent(p.path.split(/[\\/]/).pop())}`;
+      a.setAttribute('download', '');
+      el.appendChild(a);
+    }
   }
 }
 

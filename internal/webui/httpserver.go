@@ -33,10 +33,14 @@ type Request struct {
 }
 
 // Response luôn có Content-Length và Connection: close (mỗi kết nối một request, không keep-alive).
+// File lớn (tải xuống) dùng Stream + Length thay cho Body để không phải đọc cả file vào RAM.
 type Response struct {
 	Status      int
 	ContentType string
 	Body        []byte
+	Stream      io.ReadCloser // khác nil thì gửi Length byte từ Stream thay cho Body, gửi xong tự đóng
+	Length      int64
+	Disposition string // header Content-Disposition (vd. attachment; filename*=...), rỗng = không gửi
 }
 
 // Server là Web UI của một client.
@@ -71,14 +75,14 @@ func (s *Server) handleConn(conn net.Conn) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[webui] panic: %v", r)
-			writeResponse(conn, Response{500, "text/plain", []byte("internal error")})
+			writeResponse(conn, Response{Status: 500, ContentType: "text/plain", Body: []byte("internal error")})
 		}
 	}()
 	conn.SetDeadline(time.Now().Add(10 * time.Minute)) // đủ cho upload file lớn, không giữ kết nối treo mãi
 
 	req, err := readRequest(bufio.NewReader(conn))
 	if err != nil {
-		writeResponse(conn, Response{400, "text/plain", []byte(err.Error())})
+		writeResponse(conn, Response{Status: 400, ContentType: "text/plain", Body: []byte(err.Error())})
 		return
 	}
 	writeResponse(conn, s.route(req))
@@ -144,8 +148,20 @@ func writeResponse(w io.Writer, res Response) {
 	if text == "" {
 		text = "Unknown"
 	}
-	fmt.Fprintf(w, "HTTP/1.1 %d %s\r\nContent-Type: %s\r\nContent-Length: %d\r\n"+
-		"Cache-Control: no-store\r\nConnection: close\r\n\r\n",
-		res.Status, text, res.ContentType, len(res.Body))
+	length := int64(len(res.Body))
+	if res.Stream != nil {
+		defer res.Stream.Close()
+		length = res.Length
+	}
+	fmt.Fprintf(w, "HTTP/1.1 %d %s\r\nContent-Type: %s\r\nContent-Length: %d\r\n",
+		res.Status, text, res.ContentType, length)
+	if res.Disposition != "" {
+		fmt.Fprintf(w, "Content-Disposition: %s\r\n", res.Disposition)
+	}
+	io.WriteString(w, "Cache-Control: no-store\r\nConnection: close\r\n\r\n")
+	if res.Stream != nil {
+		io.CopyN(w, res.Stream, length)
+		return
+	}
 	w.Write(res.Body)
 }
