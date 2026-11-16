@@ -3,6 +3,7 @@ package webui
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/url"
@@ -27,6 +28,7 @@ const maxJSONBody = 64 << 10
 //	POST /api/logout                  đăng xuất, Web UI quay về trang đăng nhập
 //	POST /api/send   {to, text}       chat (to rỗng) hoặc DM
 //	POST /api/upload?to=&name=        thân là nội dung file thô (không multipart)
+//	GET  /api/download?name=          tải file đã nhận (trong DownloadDir) về máy qua trình duyệt
 func (s *Server) route(req *Request) Response {
 	switch {
 	case req.Path == "/" || req.Path == "/index.html":
@@ -54,26 +56,28 @@ func (s *Server) route(req *Request) Response {
 		return s.apiSend(req)
 	case req.Path == "/api/upload":
 		return s.apiUpload(req)
+	case req.Path == "/api/download":
+		return s.apiDownload(req)
 	}
-	return Response{404, "text/plain", []byte("not found")}
+	return Response{Status: 404, ContentType: "text/plain", Body: []byte("not found")}
 }
 
 // static trả một file nhúng trong binary.
 func (s *Server) static(name, ctype string) Response {
 	b, err := static.ReadFile("static/" + name)
 	if err != nil {
-		return Response{404, "text/plain", []byte("missing " + name)}
+		return Response{Status: 404, ContentType: "text/plain", Body: []byte("missing " + name)}
 	}
-	return Response{200, ctype, b}
+	return Response{Status: 200, ContentType: ctype, Body: b}
 }
 
 // jsonResp mã hóa v thành JSON.
 func jsonResp(status int, v any) Response {
 	b, err := json.Marshal(v)
 	if err != nil {
-		return Response{500, "text/plain", []byte(err.Error())}
+		return Response{Status: 500, ContentType: "text/plain", Body: []byte(err.Error())}
 	}
-	return Response{status, "application/json", b}
+	return Response{Status: status, ContentType: "application/json", Body: b}
 }
 
 // jsonErr trả {"error": msg}.
@@ -189,4 +193,49 @@ func (s *Server) apiUpload(req *Request) Response {
 		}
 	}()
 	return jsonResp(200, map[string]any{"ok": true, "size": n})
+}
+
+// apiDownload: GET /api/download?name=. Gửi file đã nhận trong DownloadDir cho trình duyệt dưới dạng
+// attachment. Chỉ lấy phần tên (filepath.Base) nên không đọc được file ngoài DownloadDir ("../" bị bỏ).
+func (s *Server) apiDownload(req *Request) Response {
+	if req.Method != "GET" {
+		return jsonErr(405, "GET only")
+	}
+	q, _ := url.ParseQuery(req.RawQuery)
+	name := filepath.Base(q.Get("name"))
+	if name == "" || name == "." || name == "/" || name == ".." {
+		return jsonErr(400, "thiếu name")
+	}
+	f, err := os.Open(filepath.Join(s.c.DownloadDir, name))
+	if err != nil {
+		return jsonErr(404, "không có file "+name)
+	}
+	st, err := f.Stat()
+	if err != nil || !st.Mode().IsRegular() {
+		f.Close()
+		return jsonErr(404, "không có file "+name)
+	}
+	return Response{
+		Status:      200,
+		ContentType: "application/octet-stream",
+		Stream:      f,
+		Length:      st.Size(),
+		Disposition: "attachment; filename*=UTF-8''" + rfc5987(name),
+	}
+}
+
+// rfc5987 mã hóa tên file (có thể có dấu tiếng Việt, dấu cách) cho filename*= trong Content-Disposition:
+// giữ chữ, số và vài ký tự an toàn, còn lại thành %XX theo từng byte UTF-8.
+func rfc5987(s string) string {
+	const safe = "!#$&+-.^_`|~"
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.IndexByte(safe, c) >= 0 {
+			b.WriteByte(c)
+		} else {
+			fmt.Fprintf(&b, "%%%02X", c)
+		}
+	}
+	return b.String()
 }
