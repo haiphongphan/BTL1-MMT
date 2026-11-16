@@ -17,13 +17,14 @@ type Delivery struct {
 
 // Stats là ảnh chụp số liệu của 1 kết nối, hiển thị trên web UI và dùng khi test.
 type Stats struct {
-	RTT      time.Duration // SRTT (RTT đã làm mượt)
-	Cwnd     int           // cửa sổ nghẽn, byte
-	InFlight int           // số byte đã gửi mà chưa được ACK
-	LostPkts uint64        // số gói bị coi là mất (đã gửi lại)
-	SentPkts uint64        // tổng số gói đã gửi, kể cả gói chỉ có ACK/PING
-	State    string        // "waiting" (server chưa biết địa chỉ client) | "connected" | "closed"
-	Peer     string        // địa chỉ UDP "ip:port" của bên kia ("" khi server chưa nhận gói nào của client)
+	RTT       time.Duration // SRTT (RTT đã làm mượt)
+	Cwnd      int           // cửa sổ nghẽn, byte
+	InFlight  int           // số byte đã gửi mà chưa được ACK
+	LostPkts  uint64        // số gói bị coi là mất (đã gửi lại)
+	SentPkts  uint64        // tổng số gói đã gửi, kể cả gói chỉ có ACK/PING
+	State     string        // "waiting" (server chưa biết địa chỉ client) | "connected" | "closed"
+	Peer      string        // địa chỉ UDP "ip:port" của bên kia ("" khi server chưa nhận gói nào của client)
+	LastHeard time.Time     // lúc nhận gói hợp lệ gần nhất (đã qua xác thực GCM); chưa nhận gói nào = lúc tạo kết nối
 }
 
 // Endpoint là những gì tầng app cần từ tầng transport. Có 2 bản cài đặt: *Conn (UDP thật) và

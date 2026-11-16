@@ -1,122 +1,46 @@
 \section{Sequence diagram}
 \label{sec:sequence}
 
-Ba sơ đồ dưới đây mô tả tầng ứng dụng: đăng nhập, một tin nhắn riêng, và một file. Diễn biến ở tầng transport
-khi một gói bị mất và được gửi lại đã có ở \cref{fig:seq-loss}; trong các sơ đồ này mỗi mũi tên STREAM ngầm
-hiểu là đã được tầng transport mã hóa, ACK và gửi lại nếu cần.
-
 \subsection{Đăng nhập}
 \begin{figure}[H]
   \centering
-  \tikzsetnextfilename{seq-login}
-  \begin{tikzpicture}[font=\small, x=0.9cm, y=0.5cm,
-      msg/.style={-{Stealth}, thick}, ack/.style={-{Stealth}, thick, blue!60!black},
-      lab/.style={font=\scriptsize, above, sloped, pos=0.5},
-      note/.style={font=\scriptsize, align=left, fill=yellow!15, inner sep=3pt}]
-    \node[draw, fill=blue!6, minimum width=2cm] at (0,0) {Client};
-    \node[draw, fill=blue!6, minimum width=2cm] at (9,0) {Server};
-    \draw[gray] (0,-0.8) -- (0,-18.5);
-    \draw[gray] (9,-0.8) -- (9,-18.5);
-    \node[note, fill=gray!12] at (4.5,-1.2) {TCP :9000, khung \texttt{[len u32][JSON]}};
-    \draw[msg] (0,-2) -- (9,-3) node[lab] {HELLO \{client\_pub\}};
-    \node[note, right] at (9.15,-3.6) {sinh cặp khóa X25519, \texttt{conn\_id};\\$k_\text{tcp}, k_\text{udp}$ = SHA-256(ECDH $\|$ ``tcp''/``udp'')};
-    \draw[msg] (9,-4.8) -- (0,-5.8) node[lab] {KEYX \{server\_pub, conn\_id, udp\_port\}};
-    \node[note, left] at (-0.15,-6.2) {tính $k_\text{tcp}, k_\text{udp}$};
-    \draw[msg] (0,-7.2) -- (9,-8.2) node[lab] {AUTH \{nonce, AES-GCM($k_\text{tcp}$, \{user, pass\})\}};
-    \node[note, right] at (9.15,-8.7) {so sha256(salt $\|$ pass) với \texttt{users.json};\\từ chối nếu user đang online;\\\fname{Registry.AddPending}, \fname{Mux.Accept(conn\_id, $k_\text{udp}$)}};
-    \draw[msg] (9,-10.2) -- (0,-11.2) node[lab] {AUTH\_OK \{users\} hoặc AUTH\_FAIL \{reason\}};
-    \node[note, fill=gray!12] at (4.5,-12) {đóng TCP; session phía server ở trạng thái pending, chờ địa chỉ UDP};
-    \node[note, fill=gray!12] at (4.5,-13.1) {UDP :9001, header 12 byte rõ + phần còn lại mã hóa bằng $k_\text{udp}$};
-    \draw[msg] (0,-13.9) -- (9,-14.9) node[lab] {\#0 PING (gửi lại sau 200, 400, 800 ms nếu chưa nghe server)};
-    \node[note, right] at (9.15,-15.4) {học IP:port thật của client, ghi log;\\session active};
-    \draw[ack] (9,-16.1) -- (0,-17.1) node[lab] {ACK};
-    \draw[msg] (9,-17) -- (0,-18) node[lab, below] {STREAM \{users: [\dots]\} tới mọi client đang online};
-  \end{tikzpicture}
+  \includegraphics[width=\linewidth,height=0.8\textheight,keepaspectratio]{img/seq-login.png}
   \caption{Đăng nhập: handshake TCP rồi mở kênh UDP}
   \label{fig:seq-login}
 \end{figure}
 
-Hai điểm đáng chú ý. Thứ nhất, server không chờ gói UDP đầu tiên mới tạo kết nối transport: \fname{Mux.Accept}
-được gọi ngay khi đăng nhập xong, nên PING đầu của client tới là có người nhận ngay. Thứ hai, danh sách user
-trong \texttt{AUTH\_OK} chỉ là ảnh chụp lúc đó; danh sách chính thức luôn đi qua kênh UDP bằng tin
-\texttt{users}, được phát cho mọi người mỗi khi có ai vào hoặc ra.
+Trong quy trình đăng nhập (\cref{fig:seq-login}), hàm \fname{Mux.Accept} được gọi ngay ở bước xử lý \texttt{AUTH}
+trên TCP để tạo sẵn đối tượng \fname{Conn} trước khi gói PING đầu tiên của client tới cổng 9001. Danh sách user
+trả về trong \texttt{AUTH\_OK} giúp client khởi tạo danh sách ban đầu ngay sau khi đăng nhập; các thay đổi trạng
+thái online về sau được đồng bộ qua kênh UDP bằng bản tin \texttt{users} phát cho cả phòng.
 
-Đăng ký (tab Đăng ký trên Web UI, \texttt{/register} trong CLI hoặc cờ \texttt{-register}) có cùng sơ đồ, chỉ
-khác message thứ ba là \texttt{REGISTER}: trước khi tới \fname{AddPending}, server kiểm tra luật tên và mật khẩu,
-từ chối tên đã có, thêm tài khoản với salt mới và ghi lại \texttt{users.json}
-(\cref{subsec:handshake}).
+Đăng ký (tab Đăng ký trên Web UI, \texttt{/register} trong CLI hoặc cờ \texttt{-register}) dùng cùng sơ đồ, chỉ
+đổi message thứ ba thành \texttt{REGISTER}: trước khi gọi \fname{AddPending}, server kiểm tra luật tên và mật khẩu,
+từ chối tên đã tồn tại, tạo tài khoản với salt mới và ghi xuống \texttt{users.json} (\cref{subsec:handshake}).
 
 \subsection{Một tin nhắn riêng}
 \begin{figure}[H]
   \centering
-  \tikzsetnextfilename{seq-dm}
-  \begin{tikzpicture}[font=\small, x=0.78cm, y=0.5cm,
-      msg/.style={-{Stealth}, thick}, http/.style={-{Stealth}, thick, green!40!black},
-      lab/.style={font=\scriptsize, above, sloped, pos=0.5},
-      note/.style={font=\scriptsize, align=left, fill=yellow!15, inner sep=3pt}]
-    \node[draw, fill=blue!6, minimum width=1.8cm, align=center] at (0,0) {Trình duyệt\\alice};
-    \node[draw, fill=blue!6, minimum width=1.8cm] at (4,0) {Client alice};
-    \node[draw, fill=blue!6, minimum width=1.8cm] at (8.5,0) {Server};
-    \node[draw, fill=blue!6, minimum width=1.8cm] at (13,0) {Client bob};
-    \node[draw, fill=blue!6, minimum width=1.8cm, align=center] at (17,0) {Trình duyệt\\bob};
-    \foreach \x in {0,4,8.5,13,17} \draw[gray] (\x,-1) -- (\x,-19);
-    \draw[http] (0,-1.8) -- (4,-2.4) node[lab] {POST /api/send \{to: bob, text\}};
-    \node[note, right] at (4.1,-3.2) {\fname{SendDM}: \texttt{Seq} = n (bộ đếm của kết nối),\\\fname{OpenStream} ưu tiên cao, ghi \texttt{[0x01][JSON]}, FIN};
-    \draw[http] (4,-4.3) -- (0,-4.9) node[lab] {200 \{ok\}; JS tự hiển thị tin vừa gửi};
-    \draw[msg] (4,-5.2) -- (8.5,-6.2) node[lab] {STREAM id lẻ: \{dm, to: bob, seq: n\}};
-    \node[note, right] at (8.6,-7) {\fname{serveSession}: gom tới FIN, \fname{SeqBuffer} của alice\\ghi đè \texttt{From} = alice; \fname{Registry.GetByName(bob)}\\xếp vào \texttt{sendCh} của bob (không chặn)};
-    \node[note, right] at (8.6,-9.3) {\fname{writeLoop} của bob: \texttt{Seq} = m (dãy riêng của bob)};
-    \draw[msg] (8.5,-10.2) -- (13,-11.2) node[lab] {STREAM id chẵn: \{dm, from: alice, seq: m, ts\}};
-    \node[note, right] at (13.1,-12) {\fname{listenLoop}: \fname{SeqBuffer}\\$\to$ \fname{EventLog} (seq k)};
-    \draw[http] (17,-13.2) -- (13,-13.8) node[lab] {GET /api/events?since=k-1 (poll 400 ms)};
-    \draw[http] (13,-14.3) -- (17,-14.9) node[lab] {[\{type: dm, from: alice, text\}]};
-    \node[note, right] at (17.1,-15.4) {mở/đánh dấu tab alice};
-    \node[note, fill=red!8] at (8.5,-16.6) {Nếu bob không online: server không gửi được, trả \{error\} về alice qua cùng \fname{writeLoop}};
-    \draw[msg] (8.5,-17.4) -- (4,-18.4) node[lab] {\{error, text: ``User bob hiện không online''\}};
-  \end{tikzpicture}
+  \includegraphics[width=\linewidth,height=0.8\textheight,keepaspectratio]{img/seq-dm.png}
   \caption{Vòng đời một tin nhắn riêng từ trình duyệt người gửi tới trình duyệt người nhận}
   \label{fig:seq-dm}
 \end{figure}
 
-Server không dội lại tin cho chính người gửi (tiết kiệm một lượt mạng), nên JavaScript tự hiển thị tin ngay khi
-\texttt{POST} thành công. Tin chat chung đi cùng đường nhưng được xếp vào \texttt{sendCh} của mọi session trừ
-người gửi.
+Khi gửi tin nhắn (\cref{fig:seq-dm}), server không gửi vòng bản tin đó về lại cho người gửi mà JavaScript trên
+trình duyệt tự hiển thị ngay khi nhận \texttt{200 OK} từ \texttt{POST /api/send}. Với tin nhắn broadcast, luồng đi tương tự nhưng server đẩy bản tin vào hàng đợi \texttt{sendCh} của mọi session đang active
+(trừ người gửi).
 
 \subsection{Gửi file qua server}
 \begin{figure}[H]
   \centering
-  \tikzsetnextfilename{seq-file}
-  \begin{tikzpicture}[font=\small, x=0.9cm, y=0.5cm,
-      msg/.style={-{Stealth}, thick}, ack/.style={-{Stealth}, thick, blue!60!black},
-      lab/.style={font=\scriptsize, above, sloped, pos=0.5},
-      note/.style={font=\scriptsize, align=left, fill=yellow!15, inner sep=3pt}]
-    \node[draw, fill=blue!6, minimum width=2cm] at (0,0) {Client alice};
-    \node[draw, fill=blue!6, minimum width=2cm] at (7,0) {Server};
-    \node[draw, fill=blue!6, minimum width=2cm] at (14,0) {Client bob};
-    \foreach \x in {0,7,14} \draw[gray] (\x,-0.8) -- (\x,-21.5);
-    \node[note, right] at (0.1,-1.3) {\fname{SendFile}: đọc file lượt 1 tính SHA-256,\\\fname{OpenStream} ưu tiên thấp (bulk)};
-    \draw[msg] (0,-2.8) -- (7,-3.8) node[lab] {\texttt{[0x02][len][FileMeta\{id, to: bob, name, size, sha256\}]} + byte đầu của file};
-    \node[note, right] at (7.1,-4.4) {\fname{FileHeaderParser} gom đủ meta (có thể bị cắt giữa 2 gói);\\ghi đè \texttt{From} = alice; \fname{fileTargets(bob)};\\\fname{OpenStream} bulk tới bob; goroutine \fname{relayFile}};
-    \draw[msg] (7,-6.4) -- (14,-7.4) node[lab] {\texttt{[0x02][len][meta]}};
-    \node[note, right] at (14.1,-7.9) {tạo \texttt{downloads/name} (không ghi đè),\\\fname{MultiWriter}(file, sha256)};
-    \draw[msg] (0,-9.2) -- (7,-10.2) node[lab] {STREAM off=k, $\le$ 1000 byte (lặp tới hết file)};
-    \draw[ack] (7,-10.4) -- (0,-11.4) node[lab] {ACK (transport)};
-    \draw[msg] (7,-10.4) -- (14,-11.4) node[lab] {chuyển tiếp ngay từng \fname{Delivery}};
-    \draw[ack] (14,-11.6) -- (7,-12.6) node[lab] {ACK};
-    \node[note, left] at (-0.15,-11) {\fname{progressReader}: \texttt{file\_progress}\\$\le$ 5 lần/s $\to$ thanh tiến trình};
-    \node[note, right] at (7.1,-13.1) {không giữ cả file: kênh \fname{relay} tối đa 256 mảnh;\\bob chậm thì \fname{Write} của relay bị chặn, alice tự\\chậm theo qua cửa sổ nhận (điều khiển luồng)};
-    \node[note, right] at (14.1,-13.1) {ghi đĩa + băm cùng lúc,\\\texttt{file\_progress}};
-    \draw[msg] (0,-15.6) -- (7,-16.6) node[lab] {STREAM off=size, FIN};
-    \draw[msg] (7,-16.8) -- (14,-17.8) node[lab] {FIN};
-    \node[note, right] at (14.1,-18.6) {so SHA-256 tính được với meta.sha256:\\khớp $\to$ \texttt{file\_done}; lệch $\to$ xóa file, \texttt{file\_error}};
-    \node[note, fill=gray!12] at (7,-20.6) {Tin chat gửi trong lúc này đi stream ưu tiên cao, được xếp trước các frame file ở hàng đợi gửi (\cref{sec:hol})};
-  \end{tikzpicture}
+  \includegraphics[width=\linewidth,height=0.8\textheight,keepaspectratio]{img/seq-file.png}
   \caption{Gửi file qua server theo kiểu pipeline, kiểm tra SHA-256 đầu cuối}
   \label{fig:seq-file}
 \end{figure}
 
-Meta đi chung stream với dữ liệu (\cref{subsec:app}) nên server không cần ghép hai stream lại với nhau, và
-\fname{relayFile} chỉ là một vòng lặp đọc mảnh từ kênh rồi ghi vào stream tới người nhận. Nếu người nhận biến
-mất giữa chừng, stream tới họ đóng với lỗi, server ghi log và bỏ phần còn lại; người gửi vẫn hoàn tất gửi lên
-server và chỉ biết qua danh sách user. Gửi file ``cho mọi người'' (\texttt{to} rỗng) mở một stream tới từng
-người nhận và ghi cùng một mảnh vào tất cả.
+Khi truyền file (\cref{fig:seq-file}), vì phần metadata nằm ngay ở đầu stream (\cref{subsec:app}), server tách xong
+metadata là tạo ngay một goroutine \fname{relayFile} đọc từng mảnh byte từ channel đệm (tối đa 256 mảnh) và ghi
+tiếp sang stream phía người nhận theo kiểu pipeline. Nếu người nhận mất kết nối giữa chừng, stream gửi
+xuống trả về lỗi, server ghi log và xóa bỏ các mảnh còn lại để không chặn luồng đọc của người gửi. Khi gửi file cho
+cả phòng (trường \texttt{to} để trống), server mở đồng thời một stream tới từng client đang online và fan-out từng
+mảnh dữ liệu sang tất cả các stream đó.

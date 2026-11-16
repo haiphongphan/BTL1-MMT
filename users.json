@@ -11,9 +11,17 @@
     "salt": "2b1bee61464d4d49",
     "hash": "aaa65547813ab001acfe7b271e73adba2fa22109c61cae2e9356aeecc7946805"
   },
+  "fff": {
+    "salt": "b09bcbeed910315a",
+    "hash": "ba522a30afb9adf89e3fc4ee24c4493eb1f595b5198367448e60d573947097dd"
+  },
   "hai": {
     "salt": "s3cr3t3",
     "hash": "e583bcb01b74c17f896904bf3ec0ab3fed06a1eb60f7583b83de473a36eca205"
+  },
+  "nghia": {
+    "salt": "30e018382caadd36",
+    "hash": "60669329d34c59f91fcf1585a64093d004b756494a9f2cc60398e90f547d61dd"
   },
   "phan": {
     "salt": "s3cr3t2",
@@ -22,6 +30,10 @@
   "phong": {
     "salt": "s3cr3t1",
     "hash": "21cfbf713aa9e95176896a3afd4f195af7edcc622575357eb38559e9aba6415f"
+  },
+  "phonghp": {
+    "salt": "5e76f57f3444fa12",
+    "hash": "d4d256478b092c1200e6391c6788729c5703faa9ef8efa20bc821fde979e03a7"
   },
   "user1": {
     "salt": "7587b29f689c0f75",

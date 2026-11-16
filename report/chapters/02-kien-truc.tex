@@ -1,95 +1,97 @@
 \section{Kiến trúc hệ thống}
 \label{sec:kien-truc}
 
-Hệ thống gồm một server và nhiều client. Mỗi client là một process trên máy người dùng; trình duyệt chỉ nói
-chuyện với process đó qua HTTP trên \texttt{127.0.0.1}, còn mọi thứ đi ra mạng đều là UDP đã mã hóa (trừ
-handshake TCP lúc đăng nhập). Kiến trúc bên trong tầng transport (một goroutine sở hữu state của mỗi kết nối)
-đã mô tả ở \cref{subsec:concurrency}; mục này mô tả các thành phần còn lại và luồng dữ liệu giữa chúng
-(\cref{fig:kien-truc}).
+Hệ thống gồm một server trung tâm và nhiều client. Vì trình duyệt web không mở được socket UDP thô, mỗi client chạy như một process cục bộ trên máy người dùng: trình duyệt giao tiếp với process client qua HTTP trên \texttt{127.0.0.1}, còn dữ liệu đi ra mạng LAN giữa client và server đi qua kênh UDP đã mã hóa (trừ bước handshake ban đầu dùng TCP để trao đổi khóa và đăng nhập). \Cref{fig:tong-quan} minh họa ba kênh mạng giữa các client và server; \cref{fig:kien-truc} trình bày các thành phần và luồng dữ liệu bên trong mỗi process.
 
-\begin{figure}[H]
+\begin{figure}[tbp]
   \centering
-  \tikzsetnextfilename{kien-truc}
   \begin{tikzpicture}[font=\small,
-      box/.style={draw, rounded corners, fill=blue!6, align=center, inner sep=4pt, minimum height=0.85cm},
-      grp/.style={draw, dashed, gray!70, rounded corners, inner sep=7pt},
-      ar/.style={-{Stealth}, thick}, dar/.style={{Stealth}-{Stealth}, thick},
-      lab/.style={font=\scriptsize, align=center, fill=white, inner sep=1.5pt}]
-    % ----- Client -----
-    \node[box, minimum width=4.8cm] (browser) at (0,0) {Trình duyệt\\HTML + JavaScript thuần};
-    \node[box, minimum width=4.8cm] (webui) at (0,-2.1) {\fname{webui}: HTTP/1.1 tự viết\\lắng nghe \texttt{127.0.0.1:8081+}};
-    \node[box, minimum width=4.8cm] (core) at (0,-4.2) {\fname{client/core}\\\fname{EventLog}, \fname{listenLoop}, kết nối lại};
-    \node[box, minimum width=4.8cm] (ctr) at (0,-6.3) {\fname{transport.Conn} phía client\\socket UDP riêng};
-    \node[grp, fit=(webui)(core)(ctr)] (cl) {};
-    \node[font=\bfseries, anchor=south west, gray!40!black] at (cl.north west) {Client (một process cho mỗi người dùng)};
-    \node[box] (other) at (0,-8.4) {Client khác};
-    % ----- Server -----
-    \node[box, minimum width=5.6cm] (auth) at (8.2,-1) {\fname{ListenTCP} :9000\\mỗi handshake một goroutine, deadline 10 s};
-    \node[box, minimum width=5.6cm] (reg) at (8.2,-3) {\fname{Registry} (RWMutex)\\tên $\leftrightarrow$ \texttt{conn\_id} $\leftrightarrow$ \fname{Session}};
-    \node[box, minimum width=5.6cm] (router) at (8.2,-5) {mỗi \fname{Session}: \fname{serveSession} + \fname{writeLoop}\\mỗi file đang chuyển: \fname{relayFile}};
-    \node[box, minimum width=5.6cm] (mux) at (8.2,-7) {\fname{transport.Mux}: một socket UDP :9001\\\fname{readLoop} tách gói theo \texttt{conn\_id}};
-    \node[grp, fit=(auth)(reg)(router)(mux)] (sv) {};
-    \node[font=\bfseries, anchor=south west, gray!40!black] at (sv.north west) {Server};
-    \node[box, dashed, font=\scriptsize] (disc) at (8.2,-9.3) {\fname{StartDiscovery}: broadcast \texttt{COLLAB\_SERVER ip tcp\_port udp\_port} lên :9002/UDP mỗi 2 s};
-    \draw[ar, dashed] (disc.west) -- node[lab] {\texttt{-server auto}: \fname{Discover}} (-3.1,-9.3) |- (core.west);
-    % ----- Luồng -----
-    \draw[dar] (browser) -- node[lab] {poll \texttt{/api/events} 400 ms\\\texttt{POST /api/send}, \texttt{/api/upload}} (webui);
-    \draw[dar] (webui) -- node[lab] {gọi hàm, \fname{EventLog}} (core);
-    \draw[dar] (core) -- node[lab] {\fname{Endpoint}} (ctr);
-    \draw[ar] (core.east) -- node[lab, pos=0.45] {TCP: HELLO, KEYX, AUTH} (auth.west);
-    \draw[dar] (ctr.east) -- node[lab, pos=0.5] {UDP mã hóa: chat, DM, file} (mux.west);
-    \draw[ar] (auth) -- node[lab] {\fname{AddPending}} (reg);
-    \draw[ar] (reg) -- node[lab] {\fname{Attach}} (router);
-    \draw[dar] (router) -- node[lab] {\texttt{Recv()}, \texttt{SendMessage}, \texttt{OpenStream}} (mux);
-    \draw[dar] (mux.south) |- (other.east);
+      br/.style={draw, rounded corners, fill=gray!8, align=center, minimum width=2.2cm, minimum height=0.9cm},
+      cl/.style={draw, rounded corners, fill=blue!8, align=center, minimum width=2.6cm, minimum height=0.9cm},
+      port/.style={draw, rounded corners, fill=orange!12, align=center, minimum width=2.9cm, minimum height=0.8cm},
+      http/.style={<->, >={Stealth}, thick, gray!70!black},
+      tcp/.style={->, >={Stealth}, thick, dashed, blue!60!black},
+      udp/.style={<->, >={Stealth}, very thick, orange!80!black},
+      disc/.style={->, >={Stealth}, thick, dotted, green!45!black},
+      lab/.style={font=\scriptsize, fill=white, inner sep=1pt}]
+    % clients
+    \foreach \y/\n/\w in {2.2/alice/8081, 0/bob/8082, -2.2/carol/8083} {
+      \node[br] (b\n) at (0,\y) {Trình duyệt\\\scriptsize HTML + JS};
+      \node[cl] (c\n) at (4.6,\y) {Client \n\\\scriptsize process trên máy \n};
+      \draw[http] (b\n) -- node[lab, above=2pt] {HTTP :\w} (c\n);
+    }
+    % server: draw the frame first so the port boxes sit on top of it
+    \node[draw, thick, rounded corners, fill=green!5, minimum width=3.8cm, minimum height=4.4cm,
+      label={[font=\small\bfseries]above:Server}] (srv) at (12,0) {};
+    \node[port] (p9000) at (12, 1.4) {TCP :9000\\\scriptsize handshake, đăng nhập};
+    \node[port] (p9001) at (12, 0)   {UDP :9001\\\scriptsize dữ liệu đã mã hóa};
+    \node[port] (p9002) at (12,-1.4) {UDP :9002\\\scriptsize broadcast tìm server};
+    \foreach \n in {alice, bob, carol} {
+      \draw[tcp]  ([yshift=0.25cm]c\n.east) to[out=0, in=180] (p9000.west);
+      \draw[udp]  (c\n.east) to[out=0, in=180] (p9001.west);
+      \draw[disc] (p9002.west) to[out=180, in=0] ([yshift=-0.25cm]c\n.east);
+    }
+    % legend
+    \begin{scope}[shift={(2.2,-3.5)}, font=\scriptsize]
+      \draw[http] (0,0)    -- (0.8,0)    node[right, black] {HTTP cục bộ, chỉ trong máy người dùng};
+      \draw[tcp]  (0,-0.4) -- (0.8,-0.4) node[right, black] {TCP: trao khóa X25519 và đăng nhập, đóng ngay sau đó};
+      \draw[udp]  (0,-0.8) -- (0.8,-0.8) node[right, black] {UDP tin cậy tự viết: chat, DM, file, ACK, mã hóa AES-256-GCM};
+      \draw[disc] (0.8,-1.2) -- (0,-1.2); \node[right] at (0.8,-1.2) {UDP broadcast mỗi 2 s, client dùng khi chạy \texttt{-server auto}};
+    \end{scope}
   \end{tikzpicture}
-  \caption{Kiến trúc tổng thể, các goroutine chính và luồng dữ liệu}
+  \caption{Tổng quan: nhiều client nối tới một server qua ba kênh mạng}
+  \label{fig:tong-quan}
+\end{figure}
+
+\begin{figure}[tbp]
+  \centering
+  \includegraphics[width=\linewidth]{img/kien-truc.png}
+  \caption{Kiến trúc chi tiết: các thành phần, goroutine chính và luồng dữ liệu}
   \label{fig:kien-truc}
 \end{figure}
 
-\paragraph{Server.} Có ba nhóm goroutine.
+\paragraph{Phía Server.} Server chia thành ba nhóm goroutine chính:
 \begin{enumerate}[label=(\arabic*), leftmargin=*, itemsep=2pt]
-  \item \fname{ListenTCP} nhận kết nối trên cổng 9000; mỗi handshake chạy trong một goroutine có deadline 10 s nên
-        client treo giữa chừng không giữ goroutine mãi. Đăng nhập xong, server gọi \fname{Mux.Accept(conn\_id,
-        $k_\text{udp}$)} để tạo \fname{transport.Conn} cho kết nối UDP sắp tới và gắn nó vào \fname{Session}.
-  \item Mỗi session có hai goroutine. \fname{serveSession} đọc \texttt{Recv()}, phân loại stream theo byte đầu:
-        message thì gom tới FIN rồi định tuyến; file thì đọc meta ở đầu stream rồi chuyển tiếp từng mảnh sang
-        goroutine \fname{relayFile} của file đó. \fname{writeLoop} là goroutine \emph{duy nhất} gọi
-        \texttt{SendMessage} cho session, đọc từ hàng đợi \texttt{sendCh} (4096 tin): thứ tự gửi được giữ và một
-        người nhận chậm chỉ làm đầy hàng đợi của chính họ (\cref{subsec:app}). Một goroutine ngắn
-        \fname{watchPeer} chờ gói UDP đầu tiên của client để ghi log IP:port thật và phát lại danh sách user
-        kèm địa chỉ.
-  \item \fname{Mux.readLoop} đọc socket UDP chung, tra \texttt{conn\_id} trong header rồi đẩy gói vào đúng
-        \fname{Conn}; mỗi \fname{Conn} lại có goroutine \fname{run} riêng của tầng transport.
+  \item \fname{ListenTCP} lắng nghe trên cổng 9000; mỗi lượt handshake chạy trong một goroutine riêng với deadline
+        10 giây. Ngay sau khi xác thực thành công, server gọi \fname{Mux.Accept(conn\_id, $k_\text{udp}$)} để tạo
+        đối tượng \fname{transport.Conn} cho kết nối UDP và gắn vào \fname{Session}.
+  \item Mỗi session đang hoạt động có hai goroutine dài hạn: \fname{serveSession} đọc từ \texttt{Recv()} và phân
+        loại stream theo byte đầu tiên (cắt tới cờ FIN rồi đưa đi định tuyến; luồng file được
+        tách phần metadata ở đầu rồi chuyển tiếp từng mảnh sang goroutine \fname{relayFile} của file đó). Ở chiều
+        ngược lại, \fname{writeLoop} là goroutine \emph{duy nhất} gọi \texttt{SendMessage} cho session này, lấy tin
+        tuần tự từ hàng đợi \texttt{sendCh} (4096 phần tử) để giữ thứ tự gửi và cô lập các client nhận chậm
+        (\cref{subsec:app}). Khi mới tạo phiên, một goroutine ngắn hạn \fname{watchPeer} chờ gói UDP đầu tiên của
+        client để ghi nhận địa chỉ IP:port thực tế và phát lại danh sách user kèm địa chỉ mới cho cả phòng.
+  \item \fname{Mux.readLoop} đọc gói từ socket UDP chung trên cổng 9001, tra trường \texttt{conn\_id} trong header
+        để chuyển gói tới đúng đối tượng \fname{Conn}; mỗi \fname{Conn} có một goroutine \fname{run} riêng ở tầng
+        transport.
 \end{enumerate}
-\fname{Registry} là nguồn sự thật về ai đang online, bảo vệ bằng \texttt{RWMutex}. Mọi hàm của nó chỉ làm việc
-với map rồi thả khóa; việc gửi tin luôn làm sau khi đã thả khóa trên một bản sao danh sách (\fname{Snapshot}),
-nên không có goroutine nào bị kẹt trong khóa vì mạng chậm. Với 20 client, server có 4 goroutine cho mỗi client
-cộng vài goroutine nền, tổng 86 (\cref{tab:he-thong}).
+Danh sách người dùng online được lưu tại \fname{Registry} dưới khóa \texttt{RWMutex}. Các phương thức của
+\fname{Registry} chỉ cập nhật hoặc chép nhanh danh sách (\fname{Snapshot}) rồi nhả khóa ngay trước khi gửi mạng,
+tránh giữ khóa trong lúc I/O.
 
-\paragraph{Client.} Với \texttt{-server auto}, client nghe broadcast của server trên cổng 9002 (tối đa 5 s) và
-lấy IP từ địa chỉ nguồn của gói; socket bật \texttt{SO\_REUSEADDR}/\texttt{SO\_REUSEPORT} để nhiều client trên một
-máy dò cùng lúc được. \fname{client/core} giữ \fname{Endpoint} hiện tại và một goroutine \fname{listenLoop} ghép
-các stream nhận được, sắp lại tin theo \texttt{Seq} và ghi mọi sự kiện (chat, DM, danh sách user, tiến độ file,
-trạng thái kết nối) vào \fname{EventLog} có số thứ tự tăng dần. Khi \texttt{Done()} của kết nối đóng mà không
-phải do người dùng thoát, nó chuyển sang trạng thái \textsc{Reconnecting} và handshake lại (\cref{subsec:state}).
-Một process client đăng nhập, đăng xuất rồi đăng nhập lại (kể cả bằng tài khoản khác) mà không phải khởi động
-lại: \fname{Login} chạy handshake \texttt{AUTH} hoặc \texttt{REGISTER}, \fname{Logout} đóng kết nối (gửi
-\texttt{CLOSE}). Mỗi lần đăng nhập hay đăng xuất tăng một số thế hệ; \fname{listenLoop} và vòng kết nối lại
-của phiên cũ thấy số này đổi thì tự dừng, không tự đăng nhập lại bằng mật khẩu cũ.
-\fname{webui} là HTTP/1.1 tự viết trên \fname{net.Listen}: mỗi kết nối một goroutine, đọc request line, các
-header tới dòng trống, thân qua \texttt{LimitReader(Content-Length)}; không dùng \fname{net/http}. Trang HTML, JS
-và CSS được nhúng vào binary bằng \texttt{embed}. Chạy client không có \texttt{-user} thì trang đầu tiên là
-form đăng nhập / đăng ký (\texttt{POST /api/login}, \texttt{/api/register}); ô Server điền sẵn giá trị cờ
-\texttt{-server} và nhận \texttt{auto}. Sau khi đăng nhập, trình duyệt poll \texttt{/api/events?since=N} mỗi 400 ms và
-\texttt{/api/status} mỗi 1 s (địa chỉ server, RTT, cwnd, in-flight, tỉ lệ mất gói lấy từ \fname{transport.Stats}); vì sự kiện
-có số thứ tự, mở nhiều tab hay tải lại trang không làm mất hay trùng tin. Upload gửi thẳng nội dung file làm
-thân \texttt{POST /api/upload?to=\&name=}; \fname{webui} ghi ra file tạm rồi gọi \fname{SendFile} trong goroutine
-riêng, tiến độ gửi/nhận đi qua \fname{EventLog} thành thanh tiến trình.
+\paragraph{Phía Client.} Khi chạy với cờ \texttt{-server auto}, client lắng nghe gói UDP broadcast trên cổng 9002
+(tối đa 5 giây) và lấy IP server từ địa chỉ nguồn của gói tin; socket bật \texttt{SO\_REUSEADDR}/\texttt{SO\_REUSEPORT}
+để nhiều tiến trình client trên cùng máy có thể lắng nghe đồng thời. Khối \fname{client/core} giữ \fname{Endpoint}
+hiện tại cùng goroutine \fname{listenLoop} ghép các stream nhận về, sắp lại thứ tự tin nhắn theo \texttt{Seq} và
+ghi các sự kiện (chat, DM, danh sách user, tiến độ truyền file, trạng thái kết nối) vào \fname{EventLog} theo chỉ
+số tăng dần. Nếu channel \texttt{Done()} đóng mà không do người dùng thoát, client chuyển sang trạng thái
+\textsc{Reconnecting} và thực hiện handshake lại (\cref{subsec:state}).
 
-\paragraph{Luồng một tin nhắn riêng.} Trình duyệt A $\to$ \texttt{POST /api/send} $\to$ \fname{SendDM} cấp
-\texttt{Seq} và mở một stream ưu tiên cao $\to$ UDP $\to$ \fname{serveSession} của A đưa qua \fname{SeqBuffer},
-ghi đè \texttt{From} $\to$ \fname{Registry.GetByName} $\to$ \texttt{sendCh} của B $\to$ \fname{writeLoop} đánh
-\texttt{Seq} theo dãy của B $\to$ UDP $\to$ \fname{listenLoop} của B $\to$ \fname{EventLog} $\to$ poll $\to$
-trình duyệt B. Chi tiết theo thời gian ở \cref{fig:seq-dm}; file đi tương tự nhưng theo kiểu pipeline
-(\cref{fig:seq-file}).
+\paragraph{Giao diện.} \fname{webui} là một HTTP/1.1 server nhóm tự viết trên \fname{net.Listen} (đọc request
+line, header và body theo \texttt{Content-Length}), phục vụ trang HTML + JavaScript thuần nhúng sẵn vào file thực
+thi. Trình duyệt poll \texttt{/api/events?since=N} để lấy sự kiện mới từ \fname{EventLog} (mỗi sự kiện có số thứ tự
+tăng dần nên F5 hay mở nhiều tab không mất hoặc lặp tin) và \texttt{/api/status} để hiện RTT, cwnd, tỉ lệ mất gói.
+File gửi đi được đẩy thẳng vào body của \texttt{POST /api/upload}. Luồng đi của một DM và một file qua các khối trên
+được vẽ ở \cref{fig:seq-dm,fig:seq-file}; chi tiết cài đặt có trong \fname{docs/code-walkthrough.md}.
+\IfFileExists{img/webui.png}{\Cref{fig:webui} là giao diện khi đang gửi file: cột trái là danh sách user
+online kèm IP:port, giữa là tin nhắn theo tab (chat chung và từng DM) cùng thanh tiến trình file, thanh trên cùng
+là trạng thái mạng (connected/reconnecting, RTT, cwnd, tỉ lệ mất gói).}{}
+
+\IfFileExists{img/webui.png}{%
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\linewidth]{img/webui.png}
+  \caption{Giao diện web của client khi đang gửi file}
+  \label{fig:webui}
+\end{figure}}{}

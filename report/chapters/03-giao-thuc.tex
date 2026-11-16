@@ -1,9 +1,15 @@
 \section{Đặc tả giao thức}
 \label{sec:giao-thuc}
 
-Giao thức gồm hai giai đoạn: \textbf{handshake trên TCP} (trao đổi khóa và đăng nhập, xong thì đóng) và
-\textbf{truyền dữ liệu trên UDP} (chat, DM, file, ACK, keep-alive). Mọi số nguyên trên dây đều là
-\emph{big-endian}. Định nghĩa đầy đủ nằm trong \fname{internal/protocol} và \fname{docs/protocol.md}.
+Giao thức do nhóm thiết kế hoạt động qua hai giai đoạn tách biệt:
+\begin{itemize}
+  \item \textbf{Handshake trên TCP:} hai bên trao đổi khóa công khai và xác thực tài khoản đăng nhập. Ngay khi
+        đăng nhập thành công, kết nối TCP này được đóng lại.
+  \item \textbf{Truyền dữ liệu trên UDP:} toàn bộ tin nhắn chat, tin nhắn riêng (DM), dữ liệu file, các gói xác
+        nhận (ACK) và gói keep-alive đều đi qua một kênh UDP duy nhất.
+\end{itemize}
+Tất cả các trường số nguyên đa byte trên đường truyền đều được đóng gói theo chuẩn \emph{big-endian}. Đặc tả đầy đủ của từng bản tin nằm trong package \fname{internal/protocol} và tài liệu
+\fname{docs/protocol.md}.
 
 \subsection{Cổng}
 \begin{table}[H]
@@ -14,18 +20,19 @@ Giao thức gồm hai giai đoạn: \textbf{handshake trên TCP} (trao đổi kh
     \toprule
     \textbf{Cổng} & \textbf{Giao thức} & \textbf{Dùng cho} \\
     \midrule
-    9000 & TCP & Handshake: trao đổi khóa, đăng nhập (đóng sau khi xong) \\
-    9001 & UDP & Toàn bộ dữ liệu: message, file, ACK, PING, CLOSE \\
-    9002 & UDP broadcast & Server quảng bá địa chỉ trong LAN để client tự tìm \\
-    8080+ & TCP (HTTP tự viết) & Web UI của từng client, chỉ lắng nghe trên \texttt{127.0.0.1} \\
+    9000 & TCP & Handshake: trao đổi khóa, xác thực đăng nhập (đóng ngay sau khi xong) \\
+    9001 & UDP & Kênh dữ liệu chính: message, file, ACK, PING, CLOSE \\
+    9002 & UDP broadcast & Server phát quảng bá địa chỉ trong mạng LAN \\
+    8080+ & TCP (HTTP tự viết) & Giao diện web cục bộ của từng client, chỉ lắng nghe trên \texttt{127.0.0.1} \\
     \bottomrule
   \end{tabularx}
 \end{table}
 
 \subsection{Handshake TCP}
 \label{subsec:handshake}
-Mỗi message handshake có dạng \texttt{[4 byte độ dài][JSON]}. Độ dài bị giới hạn 1 MB: độ dài do bên kia tự
-khai, nếu không giới hạn thì kẻ xấu chỉ cần gửi độ dài 4 GB là làm server cấp phát hết bộ nhớ.
+Trong giai đoạn handshake, mỗi bản tin trên TCP được đóng khung theo định dạng \texttt{[4 byte độ dài][JSON]}.
+Độ dài mỗi khung giới hạn ở mức 1 MB để tránh server bị OOM do cấp phát bộ nhớ quá lớn khi nhận phải khung có trường
+độ dài bị hỏng hoặc giả mạo. Trình tự bốn bước trao đổi được tóm tắt trong \cref{tab:handshake}.
 
 \begin{table}[H]
   \centering
@@ -35,35 +42,34 @@ khai, nếu không giới hạn thì kẻ xấu chỉ cần gửi độ dài 4 G
     \toprule
     \textbf{\#} & \textbf{Hướng} & \textbf{Message} & \textbf{Nội dung} \\
     \midrule
-    1 & C $\to$ S & \texttt{HELLO} & \texttt{client\_pub}: khóa công khai X25519 (tạm, mỗi phiên một khóa) \\
+    1 & C $\to$ S & \texttt{HELLO} & \texttt{client\_pub}: khóa công khai X25519 \cite{rfc7748} tạm thời của phiên \\
     2 & S $\to$ C & \texttt{KEYX} & \texttt{server\_pub}, \texttt{conn\_id} (định danh kết nối UDP),
     \texttt{udp\_port} \\
     3 & C $\to$ S & \texttt{AUTH} hoặc \texttt{REGISTER} & \texttt{nonce} 12 byte ngẫu nhiên, \texttt{sealed} =
     AES-GCM$_{k_\text{tcp}}$(\{user, pass\}) \\
-    4 & S $\to$ C & \texttt{AUTH\_OK} / \texttt{AUTH\_FAIL} & danh sách user online / lý do từ chối \\
+    4 & S $\to$ C & \texttt{AUTH\_OK} / \texttt{AUTH\_FAIL} & danh sách user đang online / lý do từ chối \\
     \bottomrule
   \end{tabularx}
 \end{table}
 
-Sau bước 2, hai bên tự tính cùng một bí mật chung mà không ai gửi nó qua mạng, rồi tách ra hai khóa:
+Sau bước 2, hai bên tính cùng một \emph{shared secret} bằng ECDH \cite{rfc7748} và dẫn xuất hai khóa đối xứng riêng
+cho hai kênh:
 \begin{align}
   \mathit{shared} &= \mathrm{X25519}(\mathit{priv}, \mathit{peerPub}) \\
   k_\text{tcp} &= \mathrm{SHA256}(\mathit{shared} \,\|\, \texttt{tcp}) \quad
-    \text{mã hóa user/password trong \texttt{AUTH}} \\
+    \text{mã hóa user/password trong bản tin \texttt{AUTH}} \\
   k_\text{udp} &= \mathrm{SHA256}(\mathit{shared} \,\|\, \texttt{udp}) \quad
-    \text{mã hóa mọi gói UDP}
+    \text{mã hóa các gói UDP về sau}
 \end{align}
-Dùng hai khóa riêng để hai kênh có cách sinh nonce khác nhau (TCP: nonce ngẫu nhiên; UDP: nonce từ header) không
-bao giờ dùng chung một khóa. Sau \texttt{AUTH\_OK}, kết nối TCP đóng; client gửi gói UDP đầu tiên (PING) mang
-\texttt{conn\_id} để server biết địa chỉ UDP của mình.
+Hai khóa $k_\text{tcp}$ và $k_\text{udp}$ được tách riêng vì hai kênh sinh nonce theo hai cách khác nhau: bản tin
+\texttt{AUTH} trên TCP dùng nonce ngẫu nhiên 12 byte, còn gói UDP ghép nonce xác định từ header (\cref{sec:bao-mat}).
 
-\paragraph{Đăng ký.} Tài khoản mới đi qua đúng handshake trên, chỉ đổi \texttt{type} của message 3 thành
-\texttt{REGISTER}; mật khẩu vẫn nằm trong \texttt{sealed}. Server kiểm tra tên (3--20 ký tự, chỉ chữ không dấu,
-số và \texttt{\_}), độ dài mật khẩu (6--64) và tên trùng, rồi thêm tài khoản và đăng nhập luôn trên cùng kết nối:
-không cần handshake thứ hai. Lỗi trả \texttt{AUTH\_FAIL} kèm lý do cụ thể để trang đăng ký hiện cho người dùng.
-Tài khoản mới được ghi ra file tạm cùng thư mục rồi đổi tên đè lên \texttt{users.json}; đổi tên là thao tác
-nguyên tử nên server tắt giữa chừng không để lại file hỏng, và một khóa ghi bảo đảm hai người đăng ký cùng lúc
-không ghi đè nhau. Kết nối lại tự động luôn dùng \texttt{AUTH}.
+Khi nhận \texttt{AUTH\_OK}, hai bên đóng kết nối TCP; client mở socket UDP và gửi gói PING đầu tiên kèm
+\texttt{conn\_id} vừa cấp để server ghi nhận địa chỉ IP và cổng UDP của client.
+
+\paragraph{Đăng ký.} Dùng đúng handshake trên, chỉ đổi \texttt{type} của message 3 thành \texttt{REGISTER}.
+Server kiểm tra luật tên, mật khẩu và tên trùng, ghi \texttt{users.json} thông qua file tạm rồi đổi tên và
+đăng nhập luôn trên cùng kết nối.
 
 \subsection{Gói UDP}
 \label{subsec:goi}
@@ -92,22 +98,27 @@ không ghi đè nhau. Kết nối lại tự động luôn dùng \texttt{AUTH}.
   \label{fig:goi}
 \end{figure}
 
+Cấu trúc một gói UDP được minh họa ở \cref{fig:goi}:
 \begin{itemize}
-  \item \textbf{Kích thước $\le$ 1200 byte} để không bị phân mảnh IP trên mọi đường truyền (MTU tối thiểu của
-        IPv6 là 1280 byte, trừ header IP/UDP), giống QUIC \cite{rfc9000}. Phần frame còn lại
+  \item \textbf{Kích thước gói tối đa 1200 byte:} nằm dưới MTU tối thiểu của IPv6 (1280 byte sau khi trừ header
+        IP/UDP, theo khuyến nghị của QUIC \cite{rfc9000}) để tránh IP fragmentation. Trừ đi
+        12 byte header và 16 byte authentication tag của AES-GCM, phần payload chứa các frame còn tối đa
         $1200 - 12 - 16 = 1172$ byte.
-  \item \texttt{magic} và \texttt{ver} giúp loại nhanh gói không thuộc giao thức trước khi tốn công giải mã.
-  \item \texttt{conn\_id} cho biết gói thuộc kết nối nào: server dùng chung một socket UDP cho mọi client và
-        tra \texttt{conn\_id} để chuyển gói tới đúng kết nối, nên client đổi địa chỉ (NAT) vẫn nhận ra.
-  \item \texttt{packet\_num} \textbf{tăng mãi, không bao giờ dùng lại}, kể cả khi gửi lại: dữ liệu của gói bị mất
-        được đóng vào gói mới với số mới. Nhờ vậy mỗi ACK chỉ khớp đúng một lần gửi, đo RTT không bao giờ mập mờ
-        (không cần thuật toán Karn như TCP), và nonce mã hóa không bao giờ lặp (\cref{sec:bao-mat}).
+  \item \texttt{magic} (\texttt{0xC0DE}) và \texttt{ver} dùng để lọc nhanh các gói UDP lạ trên cổng trước khi gọi
+        hàm giải mã. Byte \texttt{flg} hiện bằng 0 để dự phòng mở rộng và được bảo vệ toàn vẹn trong AAD.
+  \item \texttt{conn\_id} định danh phiên kết nối: server chỉ mở một socket UDP chung rồi tra bảng \texttt{conn\_id}
+        để chuyển gói về đúng \fname{Conn}, đồng thời giữ được phiên nếu IP/port của client thay đổi giữa chừng
+        (ví dụ NAT rebinding, tương tự Connection ID của QUIC \cite{rfc9000}).
+  \item \texttt{packet\_num} chỉ tăng, kể cả khi truyền lại dữ liệu bị mất: các frame của gói rớt được đóng vào gói
+        UDP mới với \texttt{packet\_num} mới (theo QUIC \cite{rfc9000,rfc9002}). Lý do chọn cách đánh số này xem ở
+        \cref{subsec:mat-goi} (đo RTT) và \cref{sec:bao-mat} (nonce).
 \end{itemize}
 
 \subsection{Frame}
 \label{subsec:frame}
-Phần đã mã hóa của gói chứa một hoặc nhiều frame xếp liền nhau. Bên nhận đọc byte \texttt{type} để biết độ dài
-frame, cắt ra, rồi đọc tiếp tới hết. Nhờ vậy một gói có thể vừa mang dữ liệu vừa mang ACK (\emph{piggyback}).
+Payload sau giải mã của một gói UDP gồm một hoặc nhiều \emph{frame} nối tiếp nhau, phân biệt bằng byte \texttt{type}
+ở đầu mỗi frame; nhờ đó có thể piggyback frame ACK chung gói với frame dữ liệu chiều ngược lại. Hệ thống có
+bốn loại frame (\cref{tab:frame}).
 
 \begin{table}[H]
   \centering
@@ -118,41 +129,42 @@ frame, cắt ra, rồi đọc tiếp tới hết. Nhờ vậy một gói có th�
     \textbf{Type} & \textbf{Tên} & \textbf{Cấu trúc (byte)} & \textbf{ACK?} & \textbf{Ý nghĩa} \\
     \midrule
     0x01 & STREAM & \texttt{type(1) flags(1) stream\_id(4) offset(4) len(2) data} & Có &
-    1 đoạn dữ liệu ($\le$ 1000 byte) của 1 stream; bit 0 của \texttt{flags} = FIN \\
+    Một mảnh dữ liệu ($\le$ 1000 byte) của stream; bit 0 của \texttt{flags} là cờ FIN, đóng vai trò cờ
+    \emph{End-of-Message} (hết tin nhắn/hết file) \\
     0x02 & ACK & \texttt{type(1) window(4) n(1)} $n \times$ \texttt{[start(4) end(4)]} & Không &
-    SACK theo \texttt{packet\_num} ($n \le 8$) + cửa sổ nhận \\
-    0x03 & PING & \texttt{type(1)} & Có & Giữ kết nối, báo địa chỉ client cho server \\
-    0x04 & CLOSE & \texttt{type(1) reason\_len(1) reason} & Không & Đóng ngay, không chờ timeout \\
+    SACK theo khoảng \texttt{packet\_num} ($n \le 8$) kèm kích thước cửa sổ nhận \\
+    0x03 & PING & \texttt{type(1)} & Có & Keep-alive và báo địa chỉ UDP của client cho server \\
+    0x04 & CLOSE & \texttt{type(1) reason\_len(1) reason} & Không & Thông báo đóng kết nối ngay, không chờ timeout \\
     \bottomrule
   \end{tabularx}
 \end{table}
 
-\paragraph{STREAM.} Một \emph{stream} là một dãy byte có thứ tự (một tin nhắn, hoặc một file). Nhiều stream
-chạy song song trong cùng một kết nối. \texttt{offset} là vị trí byte đầu tiên của \texttt{data} trong stream,
-bên nhận ghép lại theo offset. Client đánh \texttt{stream\_id} lẻ (1, 3, 5\dots), server đánh số chẵn, nên hai
-bên mở stream đồng thời cũng không bao giờ trùng số. Mỗi frame mang tối đa 1000 byte dữ liệu để gói còn chỗ ghép
-thêm một ACK (tối đa 70 byte).
+\paragraph{STREAM.} Mỗi \emph{stream} là một luồng byte có thứ tự độc lập (ứng với một tin nhắn hoặc một file),
+nhiều stream truyền song song trên cùng kết nối UDP theo mô hình của QUIC \cite{rfc9000}. Trường \texttt{offset}
+ghi vị trí byte đầu tiên của mảnh \texttt{data} trong stream để bên nhận ghép lại khi gói UDP đến sai thứ tự.
+Client đánh \texttt{stream\_id} số lẻ (1, 3, 5\dots) và server đánh số chẵn (2, 4, 6\dots), tương tự cách QUIC dùng
+bit thấp nhất của stream ID để phân biệt chiều mở stream \cite{rfc9000} mà không cần xin cấp ID qua mạng. Mỗi frame
+STREAM chứa tối đa 1000 byte dữ liệu để trong gói 1200 byte luôn còn chỗ ghép thêm một frame ACK (tối đa 70 byte).
 
-\paragraph{ACK.} Liệt kê các khoảng \texttt{packet\_num} đã nhận, sắp giảm dần, khoảng đầu tiên kết thúc ở gói
-lớn nhất. Ví dụ đã nhận gói 1--5, 7--9 và 12:
+\paragraph{ACK.} Frame ACK liệt kê tối đa 8 khoảng \texttt{packet\_num} liên tục đã nhận (\emph{Selective ACK} -
+SACK, tương tự ACK Range của QUIC \cite{rfc9000}), sắp từ mới nhất về trước. Ví dụ khi đã nhận các gói 1-5, 7-9
+và 12 (thiếu gói 6, 10, 11), frame ACK là:
 \begin{center}
-  \texttt{[0x02][window=48000][n=3][12,12][7,9][1,5]} \quad (30 byte; thiếu 6, 10, 11)
+  \texttt{[0x02][window=48000][n=3][12,12][7,9][1,5]} \quad (30 byte)
 \end{center}
-Đây là \emph{selective ACK}: bên gửi biết chính xác gói nào thiếu và chỉ gửi lại dữ liệu của gói đó.
-\texttt{window} là số byte bên nhận còn trống, dùng cho điều khiển luồng (\cref{subsec:dieu-toc}).
-Gói chỉ chứa ACK thì không được ACK lại, nếu không hai bên sẽ ACK qua lại vô hạn.
-
-\paragraph{CLOSE.} \texttt{reason} là chuỗi UTF-8 tối đa 255 byte; bên gửi tự cắt nếu dài hơn, và cắt đúng
-ranh giới ký tự để không làm hỏng ký tự nhiều byte.
+Từ các khoảng SACK này, bên gửi xác định đúng gói bị mất để chỉ truyền lại các frame STREAM của gói đó; trường
+\texttt{window} báo số byte còn trống trong bộ đệm nhận cho flow control (\cref{subsec:dieu-toc}). Các
+gói chỉ chứa frame ACK hoặc CLOSE không kích hoạt ACK ngược lại (quy tắc gói \emph{ack-eliciting} của QUIC
+\cite{rfc9000}).
 
 \subsection{Nội dung stream (tầng ứng dụng)}
 \label{subsec:app}
-Byte đầu tiên của mỗi stream cho biết loại:
+Khi một stream được giao lên tầng ứng dụng, byte đầu tiên của stream đóng vai trò phân loại nội dung:
 \begin{center}
   \small
   \begin{tabular}{ll}
-    MESSAGE: & \texttt{[0x01][JSON AppMsg \dots{} tới hết stream]} \\
-    FILE: & \texttt{[0x02][meta\_len u32][JSON FileMeta][dữ liệu file \dots]}
+    MESSAGE: & \texttt{[0x01][JSON AppMsg \dots{} tới khi gặp FIN]} \\
+    FILE: & \texttt{[0x02][meta\_len u32][JSON FileMeta][dữ liệu nhị phân của file \dots]}
   \end{tabular}
 \end{center}
 
@@ -164,6 +176,7 @@ type AppMsg struct {
 	To    string   `json:"to,omitempty"`
 	Text  string   `json:"text,omitempty"`
 	Users []string `json:"users,omitempty"`
+	Addrs map[string]string `json:"addrs,omitempty"` // user -> UDP "ip:port"
 	TS    int64    `json:"ts"`            // UnixMilli
 	Seq   uint64   `json:"seq,omitempty"` // per-connection message number
 }
@@ -175,74 +188,66 @@ type FileMeta struct {
 }
 \end{lstlisting}
 
-Meta của file đi \textbf{chung stream} với dữ liệu file thay vì gửi bằng một message riêng, vì giữa các stream
-không có thứ tự: nếu tách ra thì dữ liệu file có thể tới trước meta. Bên nhận đọc meta theo từng byte tới
-(\fname{FileHeaderParser}), không cần chờ cả file. SHA-256 của toàn bộ file đi trong meta để bên nhận kiểm tra file
-nguyên vẹn đầu cuối, độc lập với tầng transport.
+Với luồng truyền file, phần mô tả (\fname{FileMeta}) \textbf{được đặt ngay ở đầu cùng một stream} với dữ liệu file.
+Vì các stream khác nhau không ràng buộc thứ tự với nhau, nếu tách metadata ra stream riêng thì khi rớt gói, mảnh dữ
+liệu đầu tiên của file có thể tới đích trước cả bản tin metadata. Ở đầu nhận, \fname{FileHeaderParser} gom byte cho
+tới khi tách xong JSON \fname{FileMeta} rồi ghi thẳng các byte tiếp theo vào file đang mở; khi gặp cờ FIN, bên nhận
+băm lại file bằng SHA-256 và đối chiếu với trường \texttt{SHA256} trong metadata để kiểm tra toàn vẹn đầu-cuối.
 
-\paragraph{Thứ tự tin nhắn (\texttt{Seq}).} Mỗi tin là một stream riêng để tin này không phải chờ tin kia
-(\cref{sec:hol}); hệ quả là khi mất gói, tin \#2 có thể giao trước tin \#1. Để vẫn giao đúng thứ tự gửi, mỗi bên
-gửi đánh \texttt{Seq} = 1, 2, 3\dots{} theo từng kết nối, và bên nhận dùng \fname{protocol.SeqBuffer}: tin tới
-sớm được giữ lại tới khi các tin trước đủ, tin trùng bị bỏ, \texttt{Seq} = 0 được giao ngay. Nếu giữ quá 4096 tin
-(chỉ xảy ra khi có lỗi) thì bỏ qua chỗ trống để không treo vĩnh viễn. File không cần cơ chế này vì mỗi file là
-một stream, tầng transport đã giao đúng thứ tự theo offset.
+\paragraph{Theo dõi user, IP, cổng và tình trạng online.} Mỗi \fname{Session} trong \fname{Registry}
+lưu \texttt{Username}, \texttt{ConnID}, địa chỉ TCP lúc handshake (\texttt{TCPAddr}) và \fname{Endpoint} UDP; địa
+chỉ IP:port UDP thực tế được lấy từ \fname{Stats().Peer} của endpoint, tức địa chỉ của gói hợp lệ mới nhất (trước
+khi có gói UDP đầu tiên thì dùng IP lúc handshake). Khi có người vào (lúc server nhận gói UDP đầu tiên của họ,
+\fname{watchPeer}) hoặc ra (\fname{dropSession}), server phát bản tin \texttt{users} (kèm \texttt{Addrs}) tới mọi
+client, nên danh sách online trên giao diện luôn hiện đúng người và
+IP:port của họ (\fname{TestUserListHasAddrs}). Client chỉ cần đăng nhập và server thông báo tình trạng online cho cả phòng.
 
-\paragraph{Tích hợp ở tầng ứng dụng.} Client giữ một bộ đếm \texttt{seq} cho kết nối transport hiện tại:
-mỗi tin gửi đi được cấp \texttt{Seq} tăng dần ngay trong lúc giữ khóa cùng với việc lấy \fname{Endpoint}, và bộ
-đếm về 0 khi có kết nối mới (kết nối lại $\Rightarrow$ \texttt{conn\_id} mới $\Rightarrow$ dãy mới). Server giữ
-cho mỗi session một \fname{SeqBuffer} ở chiều nhận, nên tin của một client được định tuyến đúng thứ tự client đã
-gửi. Ở chiều gửi, vì một client nhận tin từ nhiều người gửi khác nhau nên không thể giữ nguyên \texttt{Seq} của
-người gửi: \fname{writeLoop} của session người nhận đánh lại \texttt{Seq} = 1, 2, 3\dots{} theo dãy riêng của
-\emph{người nhận} ngay trước khi gọi \texttt{SendMessage}, và tin do server tự sinh (\texttt{users},
-\texttt{error}) cũng đi qua dãy này nên không bao giờ chen ngang một tin chat. Client sắp lại bằng một
-\fname{SeqBuffer} mới cho mỗi kết nối trong \fname{listenLoop}.
+\paragraph{Giữ thứ tự giữa các tin nhắn (\texttt{Seq}).} Để tránh Head-of-Line blocking, mỗi tin nhắn đi trên một
+stream riêng (\cref{sec:hol}); do đó nếu gói UDP của tin nhắn số 1 bị rớt và chờ truyền lại, tin nhắn số 2 trên
+stream khác có thể hoàn tất và được giao lên trước. Để giữ thứ tự hội thoại trên giao diện, tầng ứng dụng đánh số
+\texttt{Seq} cho từng bản tin:
+\begin{itemize}
+  \item Trên mỗi kết nối, bên gửi gắn số thứ tự \texttt{Seq} = 1, 2, 3\dots{} tăng dần cho mỗi \fname{AppMsg}.
+  \item Bên nhận đặt bộ đệm \fname{protocol.SeqBuffer} trước khi đẩy tin lên giao diện: bản tin có \texttt{Seq} lớn
+        hơn số đang chờ được giữ tạm trong map cho tới khi các bản tin trước đó tới đủ; bản tin trùng \texttt{Seq}
+        bị bỏ qua; bản tin điều khiển không đánh số (\texttt{Seq} = 0) được giao ngay.
+  \item Nếu số bản tin chờ trong bộ đệm vượt ngưỡng \texttt{MaxSeqPending} (4096 tin) do mất hẳn một số \texttt{Seq},
+        \fname{SeqBuffer} bỏ qua khoảng trống đó để luồng chat không bị chặn.
+\end{itemize}
+Luồng truyền file không đi qua \fname{SeqBuffer} vì toàn bộ file nằm trên cùng một stream và đã được tầng transport
+ghép đúng thứ tự theo \texttt{offset}.
 
-Hàng đợi \texttt{sendCh} của mỗi session có 4096 chỗ và được ghi theo kiểu không chặn (\texttt{select} có
-\texttt{default}), nên goroutine đang định tuyến (của người gửi) không bao giờ bị kẹt vì một người nhận chậm.
-Server \emph{không bỏ tin}: bỏ tin là mất dữ liệu, trái yêu cầu truyền tin cậy, và còn để lại chỗ trống
-\texttt{Seq} làm \fname{SeqBuffer} ở client chờ mãi. Hàng đợi đầy nghĩa là client không đọc trong thời gian dài
-(4096 tin), nên server ngắt kết nối của riêng client đó (một lần, ghi log); client tự kết nối lại và nhận danh
-sách user mới (\fname{TestSlowReceiverIsDisconnected}). Test \fname{TestSeqReorderedAndRenumbered} gửi \texttt{Seq} 2, 3 rồi 1 và
-kiểm tra người nhận thấy 1, 2, 3 với \texttt{Seq} liên tiếp do server đánh.
+\paragraph{Đánh lại \texttt{Seq} khi đi qua server.} Người nhận (ví dụ Bob) nhận tin trộn từ nhiều nguồn
+(Alice, Carol, bản tin \texttt{users} của server) nên không giữ được \texttt{Seq} gốc. Vì vậy \fname{writeLoop} của
+session người nhận đánh lại \texttt{Seq} = 1, 2, 3\dots{} theo dãy riêng của Bob ngay trước khi gửi
+(\fname{TestSeqReorderedAndRenumbered}).
 
 \subsection{State diagram}
 \label{subsec:state}
-Client đi qua các trạng thái ở \cref{fig:state}; trạng thái của riêng kết nối transport
-(\texttt{waiting}/\texttt{connected}/\texttt{closed}) nằm trong \fname{transport.Stats.State} và được Web UI
-hiển thị cùng RTT, cwnd. Trạng thái \textsc{Discovering} chỉ có khi server là \texttt{auto}; nếu chỉ định
-địa chỉ \texttt{ip:port} thì client vào thẳng \textsc{Handshaking}. Client chạy không có \texttt{-user} bắt đầu ở
-\textsc{Logged out}: Web UI hiện trang đăng nhập / đăng ký. Lần đăng nhập đầu thất bại thì quay về
-\textsc{Logged out} và hiện lý do (khi chạy bằng cờ \texttt{-user} thì process thoát). Đăng xuất từ
-\textsc{Connected} hoặc \textsc{Reconnecting} cũng về \textsc{Logged out}.
+Vòng đời của client được biểu diễn ở \cref{fig:state} (trạng thái nội bộ của riêng kết nối transport gồm
+\texttt{waiting}/\texttt{connected}/\texttt{closed} nằm trong \fname{transport.Stats.State} và hiển thị trên Web UI
+cùng RTT, cwnd). Trạng thái \textsc{Discovering} chỉ dùng khi chạy \texttt{-server auto} để dò server trong LAN;
+nếu truyền trực tiếp \texttt{-server ip:port} thì client vào thẳng \textsc{Handshaking}.
 
 \begin{figure}[H]
   \centering
-  \tikzsetnextfilename{state-client}
-  \begin{tikzpicture}[font=\small, node distance=1.5cm and 1.4cm,
-      st/.style={draw, rounded corners, fill=blue!6, minimum width=3cm, minimum height=1cm, align=center},
-      ar/.style={-{Stealth}, thick}, lab/.style={font=\scriptsize, align=center}]
-    \node[st] (hs) {\textsc{Handshaking}\\TCP :9000};
-    \node[st, left=of hs] (di) {\textsc{Discovering}\\UDP :9002, $\le$ 5 s};
-    \node[st, right=of hs] (co) {\textsc{Connected}\\UDP, Web UI hoạt động};
-    \node[st, right=of co] (cl) {\textsc{Closed}};
-    \node[st, below=of hs] (re) {\textsc{Reconnecting}\\chờ 1, 2, 4\dots{} tối đa 30 s};
-    \node[st, above=of di] (lo) {\textsc{Logged out}\\trang đăng nhập / đăng ký};
-    \draw[ar] (lo) -- node[lab, left] {server\\\texttt{auto}} (di);
-    \draw[ar] (lo.south east) -- node[lab, sloped, above] {Đăng nhập / Đăng ký} (hs.north west);
-    \draw[ar] (co.north) |- node[lab, pos=0.75, above] {Đăng xuất} (lo.east);
-    \draw[ar] (di) -- node[lab, above] {nghe được\\\texttt{COLLAB\_SERVER}} (hs);
-    \draw[ar] (hs) -- node[lab, above] {AUTH\_OK, \fname{Dial} UDP,\\gửi PING đầu} (co);
-    \draw[ar] (co) -- node[lab, above] {Ctrl+C, \texttt{/quit}:\\gửi CLOSE} (cl);
-    \draw[ar] (co.south) |- node[lab, pos=0.75, below] {\texttt{Done()} đóng: không nhận gì 10 s hoặc nhận CLOSE} (re.east);
-    \draw[ar] (hs) to[bend right=25] node[lab, left] {AUTH\_FAIL,\\lỗi mạng} (re);
-    \draw[ar] (re) to[bend right=25] node[lab, right] {hết thời gian chờ} (hs);
-  \end{tikzpicture}
+  \includegraphics[width=\linewidth]{img/state-client.png}
   \caption{State diagram của client}
   \label{fig:state}
 \end{figure}
 
-Phía server, một \fname{Session} đi qua \textsc{Pending} (đã \texttt{AUTH\_OK}, \fname{Registry} đã có tên nhưng
-chưa biết địa chỉ UDP) $\to$ \textsc{Active} (nhận gói UDP đầu tiên: server biết IP:port thật, ghi log và phát lại danh sách user kèm địa chỉ) $\to$
-bị xóa khi \texttt{Done()} của kết nối đóng (\texttt{CLOSE}, idle timeout, hoặc bị ngắt vì hàng đợi gửi đầy). Session pending mà client không bao giờ gửi UDP cũng tự biến mất sau 10 s nhờ
-chính idle timeout của transport, không cần bộ đếm giờ riêng. Khi client kết nối lại trong lúc server còn giữ
-session cũ (chưa hết 10 s), nó nhận \texttt{AUTH\_FAIL} ``đang online'' và thử lại sau backoff.
+Ở phía server, mỗi \fname{Session} đi qua ba mốc (\cref{fig:state-server}): khởi tạo ở \textsc{Pending} ngay sau khi
+gửi \texttt{AUTH\_OK} (username đã ghi vào \fname{Registry} nhưng server chưa biết địa chỉ UDP của client) $\to$
+chuyển sang \textsc{Active} khi nhận gói UDP hợp lệ đầu tiên (server ghi nhận địa chỉ IP:port thực tế và phát lại
+danh sách user kèm địa chỉ cho cả phòng) $\to$ bị xóa khỏi \fname{Registry} khi channel \texttt{Done()} đóng (do
+nhận frame \texttt{CLOSE}, hết idle timeout 10 giây, hoặc bị ngắt vì hàng đợi gửi đầy). Nếu client xong handshake
+TCP nhưng mất mạng trước khi gửi gói UDP đầu tiên, phiên \textsc{Pending} cũng tự thu hồi sau 10 giây khi kết nối
+transport hết idle timeout; trong khoảng dưới 10 giây đó, nếu client kết nối lại ngay thì tạm nhận
+\texttt{AUTH\_FAIL} (tài khoản đang online) và đăng nhập thành công ở chu kỳ backoff kế tiếp.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\linewidth]{img/state-server.png}
+  \caption{State diagram của một \fname{Session} phía server}
+  \label{fig:state-server}
+\end{figure}

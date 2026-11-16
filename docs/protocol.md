@@ -215,6 +215,9 @@ trang đăng nhập và hiện lý do. Chỉ khi đã từng `CONNECTED` mới v
 | Tham số | Giá trị | Ghi chú |
 |---|---|---|
 | Đồng hồ nội bộ mỗi kết nối | 10 ms khi có gói chờ ACK, 100 ms khi rảnh | Tick 10 ms cho kết nối rảnh tốn CPU vô ích (20 client rảnh: 43% CPU → vài %) |
+| Kích thước gói UDP | ≤ 1200 byte | Tránh phân mảnh IP |
+| Dữ liệu mỗi STREAM frame | ≤ 1000 byte | Chừa chỗ ghép kèm frame ACK |
+| Hàng đợi gửi file (`bulkQ`) | 256 frame | Đầy thì chặn `Write` (backpressure) |
 | Heartbeat (PING khi rảnh) | 2 s | |
 | PING đầu sau `Dial` | gửi lại sau 200 ms, 400 ms, 800 ms... (tối đa 2 s) cho tới khi nhận được gói đầu tiên từ server | Server chỉ biết địa chỉ UDP của client khi nhận được gói đầu tiên |
 | Idle timeout (coi như chết) | 10 s | |

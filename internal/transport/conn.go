@@ -610,6 +610,8 @@ func (c *Conn) publishStats() {
 		LostPkts: c.lostPkts,
 		SentPkts: c.sentPkts,
 		State:    "connected",
+
+		LastHeard: c.lastHeard,
 	}
 
 	if c.peer != nil {
