@@ -189,7 +189,127 @@ certutil -hashfile downloads\<file> SHA256       # Windows
 
 Quan sát mã hóa bằng Wireshark với bộ lọc `tcp.port == 9000 || udp.port == 9001`: message `AUTH` chỉ có chuỗi base64 của ciphertext, payload UDP là byte ngẫu nhiên.
 
-## 7. Xử lý sự cố
+## 7. Bắt gói bằng tcpdump (demo từng kịch bản)
+
+Phần này hướng dẫn bắt gói **live** trên Linux/WSL2 để minh họa từng tính năng. Cần `sudo` và cài `tcpdump` (`sudo apt install tcpdump`).
+
+### 7.1. Các luồng traffic
+
+| Luồng | Cổng | Dùng để chứng minh |
+|---|---|---|
+| Handshake, đăng nhập | TCP 9000 | `AUTH` mã hóa, trao khóa X25519 |
+| Dữ liệu (chat, DM, file) | UDP 9001 | Transport tin cậy, mã hóa AES-256-GCM |
+| Discovery | UDP 9002 (broadcast) | `-server auto` |
+| Web UI | TCP 8081, 8082 (127.0.0.1) | HTTP server tự viết trên raw TCP |
+
+### 7.2. Quy tắc để không bị lặp gói
+
+- Chỉ bắt trên **một interface**: `-i lo` khi server và client cùng máy, `-i eth0` khi khác máy. **Không dùng `-i any`**, vì gói loopback sẽ hiện hai lần.
+- Chỉ chạy **một** tcpdump tại một thời điểm (kiểm tra bằng `pgrep tcpdump`).
+- Cờ dùng chung: `-n` (không phân giải tên), `-l` (in ngay, đủ "live"), `-s0` (lấy trọn gói).
+- WSL2: Wireshark trên Windows không thấy loopback của Linux. Hãy bắt bằng tcpdump trong WSL, ghi file (7.9) rồi mở file bằng Wireshark.
+
+### 7.3. Chuẩn bị (dùng chung cho mọi kịch bản)
+
+Mở 4 terminal tại thư mục gốc repo:
+
+1. **Terminal 1**: `./bin/server`
+2. **Terminal 2**: `./bin/client -web 127.0.0.1:8081`
+3. **Terminal 3**: `./bin/client -web 127.0.0.1:8082`
+4. **Terminal 4**: chạy lệnh tcpdump của kịch bản cần demo (các mục dưới).
+
+Bật tcpdump (Terminal 4) **trước**, rồi mới thao tác trên trình duyệt. Dừng bằng `Ctrl+C`.
+
+### 7.4. Kịch bản 1: Handshake và đăng nhập (TCP 9000)
+
+```bash
+sudo tcpdump -i lo -n -l -A -s0 'tcp port 9000'
+```
+
+1. Chạy lệnh trên ở Terminal 4.
+2. Mở http://127.0.0.1:8081, đăng nhập `alice` / `123456`.
+3. Quan sát: bắt tay 3 bước `[S]`, `[S.]`, `[.]`; sau đó message `AUTH` chỉ chứa `nonce` và `sealed` dạng base64, **không thấy mật khẩu ở dạng rõ**.
+
+### 7.5. Kịch bản 2: Dữ liệu đã mã hóa (UDP 9001)
+
+```bash
+sudo tcpdump -i lo -n -l -X -s0 'udp port 9001'
+```
+
+1. Đăng nhập `alice` (8081) và `bob` (8082).
+2. Alice gửi tin nhắn `MAT_KHAU_BI_MAT`.
+3. Quan sát: 12 byte đầu đọc được (`c0de 0100` + conn_id + packet number), phần còn lại là byte ngẫu nhiên.
+4. Chứng minh không lộ nội dung (đếm phải ra `0`):
+
+```bash
+sudo tcpdump -i lo -n -l -A -s0 'udp port 9001' | grep -c MAT_KHAU_BI_MAT
+```
+
+### 7.6. Kịch bản 3: Chat nhóm, DM và gửi file
+
+```bash
+sudo tcpdump -i lo -n -l -tttt 'udp port 9001'
+```
+
+1. Chạy lệnh trên, rồi thao tác lần lượt trên Web UI:
+   - Chat nhóm: gửi một tin. Thấy vài gói nhỏ kèm ACK từ các phía.
+   - DM: alice nhắn riêng cho bob.
+   - Gửi file: alice gửi một file lớn cho bob. Thấy chuỗi gói dài (khoảng 1000 byte mỗi gói) xen kẽ ACK, cửa sổ gửi tăng dần (CUBIC).
+2. Trong lúc file đang truyền, gửi thêm một tin chat: tin vẫn đi ngay, chứng minh các stream độc lập (không Head-of-Line blocking).
+3. Kiểm tra toàn vẹn file: `shasum -a 256 <file gốc> downloads/<file>`.
+
+### 7.7. Kịch bản 4: Mạng kém (mất gói, truyền lại)
+
+```bash
+# Terminal 1
+./bin/server -loss 0.1
+# Terminal 2 và 3
+./bin/client -loss 0.1 -web 127.0.0.1:8081
+./bin/client -loss 0.1 -web 127.0.0.1:8082
+# Terminal 4
+sudo tcpdump -i lo -n -l -tttt 'udp port 9001'
+```
+
+1. Khởi động lại server và client với `-loss 0.1`, rồi gửi một file lớn.
+2. Quan sát: các gói gửi lại sau khoảng RTO, ACK thưa hơn, tốc độ giảm rồi hồi phục.
+3. Lưu ý: `-loss` drop gói **trước khi gửi** nên tcpdump không thấy gói bị mất, chỉ thấy phần truyền lại. Để chỉ ra gói bị mất, đối chiếu log `-cclog` của app.
+
+### 7.8. Kịch bản 5: Discovery (`-server auto`) và Web UI
+
+Discovery:
+
+```bash
+sudo tcpdump -i lo -n -l -A 'udp port 9002'
+```
+
+1. Chạy lệnh trên. Cứ 2 giây có một gói `COLLAB_SERVER <ip> 9000 9001`.
+2. Chạy client với `./bin/client -server auto -user alice -pass 123456` để thấy client dò ra server.
+3. Nếu `lo` không thấy gói (broadcast đi qua card mạng thật), đổi sang `-i eth0`.
+
+Web UI (HTTP tự viết):
+
+```bash
+sudo tcpdump -i lo -n -l -A -s0 'tcp port 8081'
+```
+
+Thao tác trên trang 8081, quan sát các request `POST /api/...` và `GET /api/...` ở dạng rõ. Đây là traffic localhost giữa trình duyệt và client, không đi qua mạng.
+
+### 7.9. Bắt tất cả một lần và mở bằng Wireshark
+
+```bash
+sudo tcpdump -i lo -n -s0 -U -w btl.pcap 'tcp port 9000 or udp port 9001 or udp port 9002 or tcp port 8081 or tcp port 8082'
+```
+
+1. Chạy lệnh, thực hiện các thao tác của 7.4 đến 7.8, rồi `Ctrl+C`.
+2. Trên WSL2, ghi thẳng ra Windows: thay `btl.pcap` bằng `/mnt/c/Users/<tên>/Desktop/btl.pcap`.
+3. Mở bằng Wireshark và dùng display filter để tách kịch bản:
+   - `tcp.port == 9000`: handshake, đăng nhập
+   - `udp.port == 9001`: dữ liệu mã hóa
+   - `udp.port == 9002`: discovery
+   - `tcp.port == 8081 || tcp.port == 8082`: Web UI
+4. Chứng minh mã hóa: **Edit → Find Packet → String**, nhập `MAT_KHAU_BI_MAT`, kết quả phải là không tìm thấy.
+
+## 8. Xử lý sự cố
 
 | Hiện tượng | Cách xử lý |
 |---|---|
@@ -200,14 +320,14 @@ Quan sát mã hóa bằng Wireshark với bộ lọc `tcp.port == 9000 || udp.po
 | Chạy server trong WSL2, máy khác trong LAN không vào được | WSL2 mặc định nằm sau NAT của Windows: khi demo nhiều máy nên chạy bản Windows (`server.exe`), hoặc bật `networkingMode=mirrored` trong `.wslconfig` |
 | `go: go.mod requires go >= ...` | Cập nhật Go lên bản mới hơn (xem `go version`) |
 
-## 8. Giao thức và transport (tóm tắt)
+## 9. Giao thức và transport (tóm tắt)
 
 TCP `:9000` chỉ dùng cho handshake (trao khóa ECDH X25519, đăng nhập/đăng ký đã mã hóa). Mọi dữ liệu (chat, DM,
 file) đi qua **giao thức tin cậy tự viết trên UDP `:9001`**: gói ≤ 1200 byte mã hóa AES-256-GCM, SACK và truyền lại
 theo RFC 9002, nhiều stream độc lập nên không Head-of-Line blocking, congestion control CUBIC (RFC 9438). Chi tiết:
 [`docs/protocol.md`](docs/protocol.md), [`docs/reliability.md`](docs/reliability.md) và báo cáo trong `report/`.
 
-## 9. Cấu trúc thư mục
+## 10. Cấu trúc thư mục
 
 ```
 cmd/server, cmd/client, cmd/mkusers   # main: chỉ đọc cờ và lắp ráp
